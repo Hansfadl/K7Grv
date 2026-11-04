@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny Catch-all for undefined collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Users Collection: Authorized personnel profiles stored in Firestore
+    match /users/{userId} {
+      allow read, list: if true;
+      allow write: if isValidId(userId);
+    }
+
+    // Admins Collection: System administrators
+    match /admins/{userId} {
+      allow read, list: if true;
+      allow write: if isValidId(userId);
+    }
+
+    // Grievance Cases & Subcollections: Persistent enterprise complaints repository
+    match /cases/{caseId} {
+      allow read, list: if true;
+      allow write: if isValidId(caseId);
+
+      // Subcollections: Investigation notes & witness interviews
+      match /investigations/{investigationId} {
+        allow read, list: if true;
+        allow write: if isValidId(caseId) && isValidId(investigationId);
+      }
+
+      // Subcollections: Root cause analysis (5 Whys / Ishikawa)
+      match /root_causes/{rcId} {
+        allow read, list: if true;
+        allow write: if isValidId(caseId) && isValidId(rcId);
+      }
+
+      // Subcollections: Corrective & Preventive Actions (CAPA)
+      match /action_plans/{actionId} {
+        allow read, list: if true;
+        allow write: if isValidId(caseId) && isValidId(actionId);
+      }
+
+      // Subcollections: Internal correspondence and formal memos
+      match /communications/{commId} {
+        allow read, list: if true;
+        allow write: if isValidId(caseId) && isValidId(commId);
+      }
+
+      // Subcollections: Evidence files, photos, PDFs, and chain of custody
+      match /evidence/{evidenceId} {
+        allow read, list: if true;
+        allow write: if isValidId(caseId) && isValidId(evidenceId);
+      }
+    }
+
+    // Audit Logs: Append-only compliance & access tracking ledger
+    match /audit_logs/{logId} {
+      allow read, list: if true;
+      allow create: if isValidId(logId);
+      allow update, delete: if false; // Strict immutability
+    }
+
+    // Master Data: Department list, complaint categories, and SLAs
+    match /master_data/{dataId} {
+      allow read, list: if true;
+      allow write: if isValidId(dataId);
+    }
+
+    // Connection verification probe
+    match /test/{testId} {
+      allow read, write: if true;
+    }
+  }
+}

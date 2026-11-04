@@ -1,0 +1,6 @@
+{
+  "name": "SJI HR Grievance Management System",
+  "description": "Enterprise grievance management system for authorized HR teams and designated PICs featuring secure case tracking, investigation workflows, root cause analysis, and compliance reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

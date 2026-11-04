@@ -1,0 +1,237 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authorized staff profile within SJI HR system",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["hr_admin", "hr_investigator", "department_pic", "hr_lead"] },
+        "department": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "employeeId": { "type": "string", "maxLength": 64 },
+        "pin": { "type": "string", "maxLength": 64 },
+        "lastLoginAt": { "type": "string", "maxLength": 64 },
+        "lastLoginDevice": { "type": "string", "maxLength": 256 },
+        "loginCount": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "email", "displayName", "role", "department", "status"]
+    },
+    "GrievanceCase": {
+      "title": "GrievanceCase",
+      "description": "Main grievance record registered and managed by HR",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "ticketId": { "type": "string", "maxLength": 64 },
+        "dateReceived": { "type": "string", "maxLength": 32 },
+        "employeeName": { "type": "string", "maxLength": 128 },
+        "isAnonymous": { "type": "boolean" },
+        "anonymousAlias": { "type": "string", "maxLength": 128 },
+        "department": { "type": "string", "maxLength": 128 },
+        "complaintCategory": { "type": "string", "maxLength": 128 },
+        "priority": { "type": "string", "enum": ["Minor", "Major", "Critical"] },
+        "status": { "type": "string", "enum": ["Open", "Investigation", "Waiting Employee", "Waiting Approval", "Action Taken", "Resolved", "Closed"] },
+        "assignedPic": { "type": "string", "maxLength": 128 },
+        "assignedPicId": { "type": "string", "maxLength": 128 },
+        "assignedInvestigator": { "type": "string", "maxLength": 128 },
+        "assignedInvestigatorId": { "type": "string", "maxLength": 128 },
+        "progress": { "type": "number" },
+        "dueDate": { "type": "string", "maxLength": 32 },
+        "closingDate": { "type": "string", "maxLength": 32 },
+        "slaStatus": { "type": "string", "enum": ["On Track", "Approaching Due", "Breached", "Met"] },
+        "slaHoursLeft": { "type": "number" },
+        "lastUpdate": { "type": "string", "maxLength": 64 },
+        "description": { "type": "string", "maxLength": 4000 },
+        "incidentDate": { "type": "string", "maxLength": 32 },
+        "location": { "type": "string", "maxLength": 256 },
+        "involvedParties": { "type": "string", "maxLength": 512 },
+        "channelReceived": { "type": "string", "maxLength": 128 },
+        "resolutionSummary": { "type": "string", "maxLength": 3000 },
+        "closureRemarks": { "type": "string", "maxLength": 2000 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["ticketId", "dateReceived", "department", "complaintCategory", "priority", "status"]
+    },
+    "InvestigationFinding": {
+      "title": "InvestigationFinding",
+      "description": "Witness testimony, interviews, and investigator findings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "investigatorName": { "type": "string", "maxLength": 128 },
+        "investigatorId": { "type": "string", "maxLength": 128 },
+        "intervieweeName": { "type": "string", "maxLength": 128 },
+        "interviewType": { "type": "string", "enum": ["Complainant", "Accused / Respondent", "Witness", "Subject Matter Expert"] },
+        "dateConducted": { "type": "string", "maxLength": 32 },
+        "keyFindings": { "type": "string", "maxLength": 4000 },
+        "statementSummary": { "type": "string", "maxLength": 4000 },
+        "credibilityAssessment": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["caseId", "title", "interviewType", "dateConducted", "keyFindings"]
+    },
+    "RootCauseAnalysis": {
+      "title": "RootCauseAnalysis",
+      "description": "5 Whys and Fishbone structural analysis for systemic resolution",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "primaryCategory": { "type": "string", "maxLength": 128 },
+        "why1": { "type": "string", "maxLength": 1000 },
+        "why2": { "type": "string", "maxLength": 1000 },
+        "why3": { "type": "string", "maxLength": 1000 },
+        "why4": { "type": "string", "maxLength": 1000 },
+        "why5": { "type": "string", "maxLength": 1000 },
+        "systemicFactors": { "type": "string", "maxLength": 2000 },
+        "preventiveRecommendations": { "type": "string", "maxLength": 2000 },
+        "analystId": { "type": "string", "maxLength": 128 },
+        "analystName": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["caseId", "primaryCategory", "why1"]
+    },
+    "ActionPlan": {
+      "title": "ActionPlan",
+      "description": "Corrective and preventive action (CAPA) item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "type": { "type": "string", "enum": ["Corrective", "Preventive", "Disciplinary", "Policy Amendment", "Counseling/Mediation"] },
+        "assignedTo": { "type": "string", "maxLength": 128 },
+        "assignedRole": { "type": "string", "maxLength": 128 },
+        "targetDate": { "type": "string", "maxLength": 32 },
+        "completedDate": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["Pending", "In Progress", "Completed", "Verified"] },
+        "verificationNotes": { "type": "string", "maxLength": 1000 },
+        "verifiedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["caseId", "title", "type", "assignedTo", "targetDate", "status"]
+    },
+    "CommunicationLog": {
+      "title": "CommunicationLog",
+      "description": "Internal memos, notes, and correspondence timeline",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "enum": ["Internal Note", "Employee Correspondence", "Formal HR Memo", "Legal Consultation", "Meeting Summary"] },
+        "subject": { "type": "string", "maxLength": 256 },
+        "content": { "type": "string", "maxLength": 4000 },
+        "senderName": { "type": "string", "maxLength": 128 },
+        "senderRole": { "type": "string", "maxLength": 128 },
+        "senderId": { "type": "string", "maxLength": 128 },
+        "recipient": { "type": "string", "maxLength": 128 },
+        "isConfidential": { "type": "boolean" },
+        "timestamp": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["caseId", "type", "subject", "content", "senderName", "senderRole", "timestamp"]
+    },
+    "EvidenceItem": {
+      "title": "EvidenceItem",
+      "description": "Evidence records with chain of custody and confidentiality control",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "category": { "type": "string", "enum": ["Document", "Email/Chat Screenshot", "Audio Recording", "Photo", "CCTV/Video Log", "Witness Written Statement"] },
+        "fileUrl": { "type": "string", "maxLength": 1024 },
+        "fileName": { "type": "string", "maxLength": 256 },
+        "fileSize": { "type": "string", "maxLength": 64 },
+        "uploadedBy": { "type": "string", "maxLength": 128 },
+        "uploadedAt": { "type": "string", "maxLength": 64 },
+        "isConfidential": { "type": "boolean" },
+        "chainOfCustody": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["caseId", "title", "category", "fileName", "uploadedBy", "uploadedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable security and activity audit log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 128 },
+        "userRole": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "ticketId": { "type": "string", "maxLength": 64 },
+        "details": { "type": "string", "maxLength": 2000 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "device": { "type": "string", "maxLength": 256 }
+      },
+      "required": ["userId", "userName", "userRole", "action", "details", "timestamp"]
+    },
+    "MasterData": {
+      "title": "MasterData",
+      "description": "Configurable system reference tables (categories, departments, SLAs)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 128 },
+        "code": { "type": "string", "maxLength": 64 },
+        "slaDays": { "type": "number" },
+        "description": { "type": "string", "maxLength": 512 },
+        "active": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["type", "name", "active"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Authorized staff profile document keyed by auth UID"
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Trusted admin registry for security rules role enforcement"
+    },
+    "/cases/{caseId}": {
+      "schema": "GrievanceCase",
+      "description": "Collection of grievance cases managed by HR team"
+    },
+    "/cases/{caseId}/investigations/{investigationId}": {
+      "schema": "InvestigationFinding",
+      "description": "Subcollection of investigation records for a specific case"
+    },
+    "/cases/{caseId}/root_causes/{rcId}": {
+      "schema": "RootCauseAnalysis",
+      "description": "Subcollection containing 5 Whys and systemic root cause analysis"
+    },
+    "/cases/{caseId}/action_plans/{actionId}": {
+      "schema": "ActionPlan",
+      "description": "Subcollection of corrective and preventive action items"
+    },
+    "/cases/{caseId}/communications/{commId}": {
+      "schema": "CommunicationLog",
+      "description": "Subcollection of internal notes, memos, and logged communications"
+    },
+    "/cases/{caseId}/evidence/{evidenceId}": {
+      "schema": "EvidenceItem",
+      "description": "Subcollection of evidence files and chain-of-custody metadata"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Append-only security audit log recording user actions and access"
+    },
+    "/master_data/{dataId}": {
+      "schema": "MasterData",
+      "description": "Reference catalog for grievance categories, departments, and SLA configurations"
+    }
+  }
+}
