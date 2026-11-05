@@ -16,6 +16,16 @@ import {
 } from '../services/db';
 import { useAuth } from './AuthContext';
 
+export type DetailTabType =
+  | 'overview'
+  | 'investigation'
+  | 'root_cause'
+  | 'action_plan'
+  | 'communication'
+  | 'evidence'
+  | 'audit'
+  | 'approvals';
+
 interface CaseContextType {
   cases: GrievanceCase[];
   filteredCases: GrievanceCase[];
@@ -27,8 +37,8 @@ interface CaseContextType {
   setIsNewCaseModalOpen: (open: boolean) => void;
   isImportModalOpen: boolean;
   setIsImportModalOpen: (open: boolean) => void;
-  detailActiveTab: 'overview' | 'investigation' | 'root_cause' | 'action_plan' | 'communication' | 'evidence' | 'audit';
-  setDetailActiveTab: (tab: 'overview' | 'investigation' | 'root_cause' | 'action_plan' | 'communication' | 'evidence' | 'audit') => void;
+  detailActiveTab: DetailTabType;
+  setDetailActiveTab: (tab: DetailTabType) => void;
   
   // Search & Filters
   searchQuery: string;
@@ -49,6 +59,10 @@ interface CaseContextType {
   handleDeleteCase: (caseId: string, reason?: string) => Promise<void>;
   handleImportCases: (newCases: Partial<GrievanceCase>[]) => Promise<number>;
   handleExport: (format?: 'xlsx' | 'csv') => void;
+  openCaseDetail: (
+    c: GrievanceCase,
+    tab?: DetailTabType
+  ) => void;
   syncStatus: {
     hasError: boolean;
     errorMessage: string | null;
@@ -81,7 +95,7 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
   const [isNewCaseModalOpen, setIsNewCaseModalOpen] = useState<boolean>(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
-  const [detailActiveTab, setDetailActiveTab] = useState<'overview' | 'investigation' | 'root_cause' | 'action_plan' | 'communication' | 'evidence' | 'audit'>('overview');
+  const [detailActiveTab, setDetailActiveTab] = useState<DetailTabType>('overview');
 
   // Filters
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -288,7 +302,7 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const openCaseDetail = useCallback((
     c: GrievanceCase,
-    tab: 'overview' | 'investigation' | 'root_cause' | 'action_plan' | 'communication' | 'evidence' | 'audit' = 'overview'
+    tab: DetailTabType = 'overview'
   ) => {
     setSelectedCase(c);
     setDetailActiveTab(tab);

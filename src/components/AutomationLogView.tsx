@@ -1050,7 +1050,7 @@ export const AutomationLogView: React.FC = () => {
                   },
                 ].map((item) => (
                   <div
-                    key={item.key}
+                    key={String(item.key)}
                     className="flex items-center justify-between p-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition"
                   >
                     <div>
