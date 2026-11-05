@@ -17,6 +17,7 @@ import {
   PieChart
 } from 'lucide-react';
 import { GrievanceCase } from '../types';
+import { useToast } from '../context/ToastContext';
 
 interface DashboardViewProps {
   onOpenCase: (c: GrievanceCase) => void;
@@ -26,6 +27,7 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavigateToCases }) => {
   const { cases, stats, setIsNewCaseModalOpen, setIsImportModalOpen, handleExport, syncStatus, handleSyncOffline } = useCases();
   const { currentUser, canRegisterCase } = useAuth();
+  const toast = useToast();
 
   // Urgent cases needing prompt action (Breached or Critical)
   const urgentCases = cases
@@ -130,9 +132,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
             onClick={async () => {
               const res = await handleSyncOffline();
               if (res.errors.length === 0) {
-                alert(`Berhasil menyinkronkan ${res.synced} kasus ke Cloud Firestore.`);
+                toast.success(`Berhasil menyinkronkan ${res.synced} kasus ke Cloud Firestore.`);
               } else {
-                alert(`Gagal sinkronisasi: ${res.errors.join(', ')}`);
+                toast.error(`Gagal sinkronisasi: ${res.errors.join(', ')}`);
               }
             }}
             className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition self-start sm:self-auto shrink-0"

@@ -732,7 +732,7 @@ export const CaseDetailModal: React.FC = () => {
         {/* Tab Contents */}
         <div className="p-5 overflow-y-auto flex-1 space-y-5">
           {/* TAB 1: OVERVIEW */}
-          {detailActiveTab === 'overview' && (
+          {(detailActiveTab === 'overview' || !['investigation', 'root_cause', 'action_plan', 'evidence', 'communication'].includes(detailActiveTab)) && (
             <div className="space-y-4">
               {/* Metadata Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
