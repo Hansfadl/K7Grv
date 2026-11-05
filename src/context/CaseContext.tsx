@@ -49,6 +49,10 @@ interface CaseContextType {
   handleDeleteCase: (caseId: string, reason?: string) => Promise<void>;
   handleImportCases: (newCases: Partial<GrievanceCase>[]) => Promise<number>;
   handleExport: (format?: 'xlsx' | 'csv') => void;
+  openCaseDetail: (
+    c: GrievanceCase,
+    tab?: 'overview' | 'investigation' | 'root_cause' | 'action_plan' | 'communication' | 'evidence' | 'audit'
+  ) => void;
   syncStatus: {
     hasError: boolean;
     errorMessage: string | null;

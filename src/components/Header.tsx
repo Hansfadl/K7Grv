@@ -15,6 +15,7 @@ import {
   PanelLeftClose,
   PanelLeft
 } from 'lucide-react';
+import { NotificationCenter } from './NotificationCenter';
 
 interface HeaderProps {
   isSidebarOpen?: boolean;
@@ -149,6 +150,9 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
                 </button>
               </div>
             )}
+
+            {/* Notification Center */}
+            <NotificationCenter />
 
             {/* User Profile & Secure Sign Out Dropdown */}
             <div className="relative">

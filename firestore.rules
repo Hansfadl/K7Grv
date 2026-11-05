@@ -71,6 +71,32 @@ service cloud.firestore {
       allow write: if isValidId(dataId);
     }
 
+    // Notifications: User notification inbox with read state
+    match /notifications/{notificationId} {
+      allow read, list: if true;
+      allow write: if isValidId(notificationId);
+    }
+
+    // Automation Logs: Append-only execution history and retry audit
+    match /automation_logs/{logId} {
+      allow read, list: if true;
+      allow create: if isValidId(logId);
+      allow update: if isValidId(logId);
+      allow delete: if false;
+    }
+
+    // Automation Config: System automation rules and toggles
+    match /automation_config/{configId} {
+      allow read, list: if true;
+      allow write: if isValidId(configId);
+    }
+
+    // Governance Approvals: Request and decisions ledger
+    match /approvals/{approvalId} {
+      allow read, list: if true;
+      allow write: if isValidId(approvalId);
+    }
+
     // Connection verification probe
     match /test/{testId} {
       allow read, write: if true;
