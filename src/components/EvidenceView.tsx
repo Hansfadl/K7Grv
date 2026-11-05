@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { GrievanceCase, EvidenceItem } from '../types';
 import { getCaseEvidence, addCaseEvidence, deleteCaseEvidence } from '../services/db';
+import { useToast } from '../context/ToastContext';
 
 interface EvidenceViewProps {
   onOpenCase: (c: GrievanceCase, tab?: any) => void;
@@ -33,6 +34,7 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 export const EvidenceView: React.FC<EvidenceViewProps> = ({ onOpenCase }) => {
   const { cases } = useCases();
   const { currentUser } = useAuth();
+  const toast = useToast();
 
   const [selectedCaseId, setSelectedCaseId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -184,7 +186,7 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({ onOpenCase }) => {
 
   const handleDownloadItem = (item: EvidenceItem) => {
     if (!item.fileData && !item.fileUrl) {
-      alert('Data file tidak tersedia untuk diunduh.');
+      toast.warning('Data file tidak tersedia untuk diunduh.');
       return;
     }
 
