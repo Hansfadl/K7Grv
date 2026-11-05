@@ -11,95 +11,141 @@ import {
   HelpCircle,
   RotateCcw,
   Layers,
-  ChevronDown
+  ChevronDown,
+  Search,
+  Eye,
+  User,
+  Wrench,
+  Cog,
+  Box,
+  Scale,
+  Compass,
+  Check
 } from 'lucide-react';
-import { GrievanceCase, RootCauseAnalysis } from '../types';
-import { getCaseRootCause, saveCaseRootCause } from '../services/db';
+import { GrievanceCase, RootCauseAnalysis, Rca6MCategory } from '../types';
+import { getCaseRootCauses, saveCaseRootCause } from '../services/db';
 import { generateAiRootCause } from '../services/ai';
 
 interface RootCauseViewProps {
   onOpenCase: (c: GrievanceCase, tab?: any) => void;
 }
 
+const CATEGORIES_6M: { id: Rca6MCategory; label: string; desc: string; icon: any }[] = [
+  { id: 'Man', label: 'Man (Manusia)', desc: 'Kompetensi, beban kerja, kepemimpinan, komunikasi, perilaku', icon: User },
+  { id: 'Method', label: 'Method (Metode)', desc: 'SOP, prosedur kerja, alur koordinasi, instruksi kerja', icon: Wrench },
+  { id: 'Machine', label: 'Machine (Mesin/Alat)', desc: 'Peralatan, sistem absensi, sarana kerja, fasilitas fisik', icon: Cog },
+  { id: 'Material', label: 'Material (Bahan)', desc: 'APD, seragam, formulir, data masukan, kelengkapan berkas', icon: Box },
+  { id: 'Measurement', label: 'Measurement (Pengukuran)', desc: 'KPI, target kerja, standar evaluasi penilaian, cuti/lembur', icon: Scale },
+  { id: 'Environment', label: 'Environment (Lingkungan)', desc: 'Suhu, kebisingan, ergonomi, budaya kerja, iklim organisasi', icon: Compass },
+];
+
 export const RootCauseView: React.FC<RootCauseViewProps> = ({ onOpenCase }) => {
   const { cases } = useCases();
   const { currentUser } = useAuth();
 
-  // Active case for editing Lembar 5W
+  // Selected Case
   const [selectedCaseId, setSelectedCaseId] = useState<string>(cases[0]?.id || '');
+  const [searchFilter, setSearchFilter] = useState('');
   const activeCase = cases.find((c) => c.id === selectedCaseId) || cases[0] || null;
 
-  // Lembar 5W form state
-  const [rcaForm, setRcaForm] = useState({
-    primaryCategory: 'Management & Leadership' as RootCauseAnalysis['primaryCategory'],
-    why1: '',
-    why2: '',
-    why3: '',
-    why4: '',
-    why5: '',
-    systemicFactors: '',
-    preventiveRecommendations: '',
-  });
+  // Selected 6M Category
+  const [activeCategory, setActiveCategory] = useState<Rca6MCategory>('Man');
 
+  // Loaded RCA items for current case
+  const [rcaList, setRcaList] = useState<RootCauseAnalysis[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
 
-  // Load existing 5 Whys when active case changes
+  // 4 Fields for active category
+  const [form, setForm] = useState({
+    rootCause: '',
+    contributingFactors: '',
+    impact: '',
+    correctiveRecommendations: '',
+  });
+
+  // Load existing 6M RCA when active case changes
   useEffect(() => {
     if (!activeCase) return;
     setIsLoading(true);
     setSaveSuccessNotice(null);
 
-    getCaseRootCause(activeCase.id).then((rca) => {
-      if (rca) {
-        setRcaForm({
-          primaryCategory: rca.primaryCategory || 'Management & Leadership',
-          why1: rca.why1 || '',
-          why2: rca.why2 || '',
-          why3: rca.why3 || '',
-          why4: rca.why4 || '',
-          why5: rca.why5 || '',
-          systemicFactors: rca.systemicFactors || '',
-          preventiveRecommendations: rca.preventiveRecommendations || '',
+    getCaseRootCauses(activeCase.id).then((items) => {
+      setRcaList(items);
+      const match = items.find((item) => item.category === activeCategory);
+      if (match) {
+        setForm({
+          rootCause: match.rootCause || '',
+          contributingFactors: match.contributingFactors || '',
+          impact: match.impact || '',
+          correctiveRecommendations: match.correctiveRecommendations || '',
         });
       } else {
-        setRcaForm({
-          primaryCategory: 'Management & Leadership',
-          why1: '',
-          why2: '',
-          why3: '',
-          why4: '',
-          why5: '',
-          systemicFactors: '',
-          preventiveRecommendations: '',
+        setForm({
+          rootCause: '',
+          contributingFactors: '',
+          impact: '',
+          correctiveRecommendations: '',
         });
       }
       setIsLoading(false);
     });
   }, [activeCase?.id]);
 
-  const handleSaveRca = async (e: React.FormEvent) => {
+  // Update form fields when active category tab changes
+  useEffect(() => {
+    const match = rcaList.find((item) => item.category === activeCategory);
+    if (match) {
+      setForm({
+        rootCause: match.rootCause || '',
+        contributingFactors: match.contributingFactors || '',
+        impact: match.impact || '',
+        correctiveRecommendations: match.correctiveRecommendations || '',
+      });
+    } else {
+      setForm({
+        rootCause: '',
+        contributingFactors: '',
+        impact: '',
+        correctiveRecommendations: '',
+      });
+    }
+  }, [activeCategory, rcaList]);
+
+  const handleSaveCategoryRca = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeCase || !currentUser) return;
     setIsSaving(true);
     try {
-      await saveCaseRootCause(
+      const saved = await saveCaseRootCause(
         activeCase.id,
         {
-          ...rcaForm,
           caseId: activeCase.id,
+          ticketId: activeCase.ticketId,
+          category: activeCategory,
+          rootCause: form.rootCause,
+          contributingFactors: form.contributingFactors,
+          impact: form.impact,
+          correctiveRecommendations: form.correctiveRecommendations,
           analystId: currentUser.id,
           analystName: currentUser.displayName,
           updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
         },
         currentUser
       );
-      setSaveSuccessNotice('Lembar 5W berhasil disimpan dan disinkronkan ke audit trail.');
+
+      setRcaList((prev) => {
+        const filtered = prev.filter((item) => item.category !== activeCategory);
+        return [...filtered, saved];
+      });
+
+      setSaveSuccessNotice(`Analisis 6M (${activeCategory}) berhasil disimpan ke Firestore.`);
       setTimeout(() => setSaveSuccessNotice(null), 4000);
     } catch (err: any) {
-      alert('Gagal menyimpan Lembar 5W: ' + (err.message || 'Koneksi error'));
+      console.error('Error saving RCA:', err);
+      setSaveSuccessNotice('Gagal menyimpan RCA: ' + err.message);
     } finally {
       setIsSaving(false);
     }
@@ -109,26 +155,31 @@ export const RootCauseView: React.FC<RootCauseViewProps> = ({ onOpenCase }) => {
     if (!activeCase) return;
     setIsGeneratingAi(true);
     try {
-      const suggestion = await generateAiRootCause(activeCase);
-      setRcaForm((prev) => ({
+      const result = await generateAiRootCause(activeCase, activeCategory);
+
+      setForm((prev) => ({
         ...prev,
-        primaryCategory: suggestion.primaryCategory || prev.primaryCategory,
-        why1: suggestion.why1 || prev.why1,
-        why2: suggestion.why2 || prev.why2,
-        why3: suggestion.why3 || prev.why3,
-        why4: suggestion.why4 || prev.why4,
-        why5: suggestion.why5 || prev.why5,
-        systemicFactors: suggestion.systemicFactors || prev.systemicFactors,
-        preventiveRecommendations: suggestion.preventiveRecommendations || prev.preventiveRecommendations,
+        rootCause: result.rootCause || prev.rootCause,
+        contributingFactors: result.contributingFactors || prev.contributingFactors,
+        impact: result.impact || prev.impact,
+        correctiveRecommendations: result.correctiveRecommendations || prev.correctiveRecommendations,
       }));
-      setSaveSuccessNotice('Sugesti Lembar 5W berhasil dihasilkan oleh AI. Silakan tinjau dan simpan.');
-      setTimeout(() => setSaveSuccessNotice(null), 4000);
-    } catch (err: any) {
-      alert('Gagal menghasilkan AI root cause: ' + err.message);
+    } catch (err) {
+      console.warn('AI RCA suggestion error:', err);
     } finally {
       setIsGeneratingAi(false);
     }
   };
+
+  const filteredCases = cases.filter((c) => {
+    if (!searchFilter.trim()) return true;
+    const q = searchFilter.toLowerCase();
+    return (
+      c.ticketId.toLowerCase().includes(q) ||
+      c.complaintCategory.toLowerCase().includes(q) ||
+      c.department.toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="space-y-6">
@@ -136,247 +187,252 @@ export const RootCauseView: React.FC<RootCauseViewProps> = ({ onOpenCase }) => {
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
-            <h2 className="text-lg font-bold text-slate-900">Lembar 5W &amp; Analisis Akar Masalah (Root Cause)</h2>
-            <span className="px-2 py-0.5 rounded text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-              Ishikawa &amp; 5 Whys
+            <h2 className="text-lg font-bold text-slate-900">Root Cause Analysis (6M Ishikawa Framework)</h2>
+            <span className="px-2 py-0.5 rounded text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+              Ishikawa 6M
             </span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Formulir investigasi sistemik untuk mengidentifikasi penyebab mendasar ketidaksesuaian kerja di PT Shoenary Javanesia Inc.
+          <p className="text-xs text-slate-500 mt-1">
+            Analisis akar penyebab terstruktur: Man, Method, Machine, Material, Measurement, Environment terhubung dengan Ticket ID.
           </p>
         </div>
 
-        {/* Case Selector Dropdown */}
-        {cases.length > 0 && (
-          <div className="flex items-center space-x-2">
-            <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">Pilih Kasus:</span>
-            <select
-              value={selectedCaseId}
-              onChange={(e) => setSelectedCaseId(e.target.value)}
-              className="py-1.5 px-3 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-2xs max-w-xs"
-            >
-              {cases.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.ticketId} • {c.complaintCategory} ({c.department})
-                </option>
-              ))}
-            </select>
-          </div>
+        {activeCase && (
+          <button
+            onClick={() => onOpenCase(activeCase, 'root_cause')}
+            className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 font-medium text-xs border border-blue-200 transition"
+          >
+            <Eye className="w-4 h-4" />
+            <span>Buka Detail Kasus #{activeCase.ticketId}</span>
+          </button>
         )}
       </div>
 
-      {cases.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
-          <AlertCircle className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-          <p className="text-sm font-semibold text-slate-600">Belum ada keluhan yang terdaftar.</p>
-          <p className="text-xs text-slate-400 mt-1">Silakan daftarkan keluhan baru terlebih dahulu di menu Case Management.</p>
-        </div>
-      ) : activeCase ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column: Active Case Overview */}
-          <div className="lg:col-span-1 space-y-4">
-            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-mono font-bold text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                  {activeCase.ticketId}
-                </span>
-                <span className="text-xs font-semibold text-slate-600 px-2 py-0.5 bg-slate-100 rounded">
-                  {activeCase.department}
-                </span>
-              </div>
-
-              <div>
-                <h3 className="font-bold text-sm text-slate-900">{activeCase.complaintCategory}</h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Pelapor: {activeCase.isAnonymous ? 'Anonim (Terlindungi)' : activeCase.employeeName}
-                </p>
-              </div>
-
-              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
-                {activeCase.description}
-              </div>
-
-              <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">Prioritas</span>
-                  <strong className="text-slate-800">{activeCase.priority}</strong>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">Status Siklus</span>
-                  <strong className="text-slate-800">{activeCase.status}</strong>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">PIC Terkait</span>
-                  <span className="text-slate-800">{activeCase.assignedPic || 'Unassigned'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">Tgl Masuk</span>
-                  <span className="text-slate-800">{activeCase.dateReceived}</span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => onOpenCase(activeCase, 'root_cause')}
-                className="w-full mt-2 inline-flex items-center justify-center space-x-1 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
-              >
-                <span>Buka Detail Workspace Lengkap</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left: Case Selector */}
+        <div className="lg:col-span-4 space-y-3">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-sm text-slate-900">Pilih Ticket ID</h3>
+              <span className="text-xs text-slate-500">{filteredCases.length} Kasus</span>
             </div>
 
-            {/* Quick Case List Switcher */}
-            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">Daftar Kasus Lainnya</h4>
-              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                {cases.map((c) => (
-                  <button
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                placeholder="Cari Ticket ID, kategori..."
+                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="space-y-2 max-h-[580px] overflow-y-auto pr-1">
+              {filteredCases.map((c) => {
+                const isSelected = activeCase?.id === c.id;
+                return (
+                  <div
                     key={c.id}
                     onClick={() => setSelectedCaseId(c.id)}
-                    className={`w-full text-left p-2 rounded-lg text-xs transition flex items-center justify-between ${
-                      c.id === activeCase.id
-                        ? 'bg-blue-50 text-blue-900 font-bold border border-blue-200'
-                        : 'hover:bg-slate-50 text-slate-700 border border-transparent'
+                    className={`p-3 rounded-xl border cursor-pointer transition ${
+                      isSelected
+                        ? 'border-indigo-500 bg-indigo-50/60 shadow-xs'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
                     }`}
                   >
-                    <span className="truncate">{c.ticketId} • {c.complaintCategory}</span>
-                    <span className="text-[10px] text-slate-400 ml-1">{c.department}</span>
-                  </button>
-                ))}
-              </div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono font-bold text-xs text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200">
+                        {c.ticketId}
+                      </span>
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                        {c.department}
+                      </span>
+                    </div>
+                    <div className="font-semibold text-xs text-slate-900 truncate">
+                      {c.complaintCategory}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5 flex items-center justify-between">
+                      <span className="truncate max-w-[140px]">{c.assignedPic || 'No PIC'}</span>
+                      <span className="font-semibold text-slate-600">{c.status}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
+        </div>
 
-          {/* Right Column: Interactive Lembar 5W Form */}
-          <div className="lg:col-span-2">
-            <form onSubmit={handleSaveRca} className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-                <div>
-                  <h3 className="font-bold text-sm text-slate-900 flex items-center space-x-1.5">
-                    <GitFork className="w-4 h-4 text-blue-600" />
-                    <span>Lembar Kerja 5 Whys (Penyelidikan Akar Masalah)</span>
-                  </h3>
-                  <span className="text-xs text-slate-500">
-                    Tiket: <strong className="text-blue-700">{activeCase.ticketId}</strong> ({activeCase.complaintCategory})
+        {/* Right: 6M Tabs & Form */}
+        <div className="lg:col-span-8 space-y-4">
+          {!activeCase ? (
+            <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400 text-xs">
+              Pilih kasus untuk melihat atau menyusun analisis 6M.
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+              {/* Selected Case Header */}
+              <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <span className="font-mono text-sm font-bold text-indigo-800 bg-indigo-100 px-2.5 py-1 rounded border border-indigo-200">
+                    {activeCase.ticketId}
                   </span>
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900">{activeCase.complaintCategory}</h3>
+                    <p className="text-xs text-slate-500">
+                      Departemen: <strong>{activeCase.department}</strong> • PIC: <strong>{activeCase.assignedPic || 'Unassigned'}</strong>
+                    </p>
+                  </div>
                 </div>
 
                 <div className="flex items-center space-x-2">
-                  <button
-                    type="button"
-                    onClick={handleAiSuggest}
-                    disabled={isGeneratingAi}
-                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold transition disabled:opacity-50"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>{isGeneratingAi ? 'Menganalisis...' : 'Bantu dengan AI (Sugesti 5W)'}</span>
-                  </button>
+                  <span className="text-xs text-slate-500">Kategori Terisi:</span>
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    {rcaList.length} / 6 Dimensi
+                  </span>
                 </div>
               </div>
 
               {saveSuccessNotice && (
-                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs flex items-center space-x-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                <div className="p-3 bg-emerald-50 border-b border-emerald-200 text-emerald-800 text-xs font-medium flex items-center">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 mr-1.5" />
                   <span>{saveSuccessNotice}</span>
                 </div>
               )}
 
-              {/* Primary Category Domain */}
-              <div>
-                <label className="block text-xs font-bold text-slate-800 mb-1">
-                  Kategori Utama Ishikawa (Domain Masalah) *
-                </label>
-                <select
-                  value={rcaForm.primaryCategory}
-                  onChange={(e) => setRcaForm({ ...rcaForm, primaryCategory: e.target.value as any })}
-                  className="w-full sm:w-80 px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white font-medium focus:outline-none focus:ring-1 focus:ring-blue-500"
-                >
-                  <option value="Management & Leadership">Management &amp; Leadership (Kepemimpinan / Koordinasi)</option>
-                  <option value="Process">Process (Standar Operasional / Prosedur Alur Kerja)</option>
-                  <option value="Policy">Policy (Kebijakan Perusahaan / Peraturan)</option>
-                  <option value="People">People (Kompetensi / Pelatihan Karyawan)</option>
-                  <option value="Work Environment">Work Environment (Lingkungan Kerja &amp; Keselamatan)</option>
-                  <option value="Equipment / System">Equipment / System (Peralatan Kerja / Sistem IT)</option>
-                </select>
-              </div>
+              {/* 6M Category Selector Tabs */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 border-b border-slate-200 bg-slate-100/70 p-1.5 gap-1.5">
+                {CATEGORIES_6M.map((cat) => {
+                  const Icon = cat.icon;
+                  const isActive = activeCategory === cat.id;
+                  const hasData = rcaList.some((item) => item.category === cat.id && item.rootCause?.trim());
 
-              {/* 5 Whys Sequential Chain */}
-              <div className="space-y-3 bg-slate-50/70 p-4 rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between text-xs font-bold text-blue-900 border-b border-slate-200 pb-1.5">
-                  <span>Rantai Interogasi 5 Whys (Mengapa Hal Ini Terjadi?)</span>
-                  <span className="text-[11px] text-slate-500 font-normal">Tingkat 1 s/d Tingkat 5</span>
-                </div>
-
-                {[1, 2, 3, 4, 5].map((num) => {
-                  const key = `why${num}` as keyof typeof rcaForm;
                   return (
-                    <div key={num} className="space-y-1">
-                      <div className="flex items-center space-x-2">
-                        <span className="w-6 h-6 rounded-md bg-blue-600 text-white font-bold text-xs flex items-center justify-center flex-shrink-0">
-                          {num}
-                        </span>
-                        <label className="text-xs font-semibold text-slate-800">
-                          Why #{num}: {num === 5 ? '(Akar Masalah Utama / Root Cause)' : ''}
-                        </label>
-                      </div>
-                      <input
-                        type="text"
-                        value={rcaForm[key]}
-                        onChange={(e) => setRcaForm({ ...rcaForm, [key]: e.target.value })}
-                        placeholder={`Mengapa kejadian pada tingkat ${num} ini bisa terjadi?`}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-2xs"
-                      />
-                    </div>
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setActiveCategory(cat.id)}
+                      className={`flex flex-col items-center justify-center p-2.5 rounded-lg text-xs font-semibold transition relative ${
+                        isActive
+                          ? 'bg-white text-indigo-700 shadow-xs border border-indigo-200'
+                          : 'text-slate-600 hover:bg-white/60 hover:text-slate-900'
+                      }`}
+                    >
+                      {hasData && (
+                        <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500" />
+                      )}
+                      <Icon className={`w-4 h-4 mb-1 ${isActive ? 'text-indigo-600' : 'text-slate-500'}`} />
+                      <span className="text-[11px] font-bold">{cat.id}</span>
+                      <span className="text-[9px] text-slate-400 font-normal truncate max-w-full">
+                        {cat.label.split(' ')[1]?.replace(/[()]/g, '')}
+                      </span>
+                    </button>
                   );
                 })}
               </div>
 
-              {/* Systemic Factors & Preventive Recommendations */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 mb-1">
-                    Faktor Sistemik yang Ditemukan (Systemic Drivers)
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={rcaForm.systemicFactors}
-                    onChange={(e) => setRcaForm({ ...rcaForm, systemicFactors: e.target.value })}
-                    placeholder="Contoh: Kurangnya pengawasan berkala lini, belum ada checklist harian, atau bias subjektif atasan..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 mb-1">
-                    Rekomendasi Tindakan Pencegahan (Preventive Recommendations)
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={rcaForm.preventiveRecommendations}
-                    onChange={(e) => setRcaForm({ ...rcaForm, preventiveRecommendations: e.target.value })}
-                    placeholder="Contoh: Refreshment training supervisor, revisi SOP pembagian lembur, audit berkala HR..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
+              {/* 4 Fields Form */}
+              <form onSubmit={handleSaveCategoryRca} className="p-5 space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-900 flex items-center space-x-2">
+                      <span>Dimensi: {CATEGORIES_6M.find((c) => c.id === activeCategory)?.label}</span>
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      {CATEGORIES_6M.find((c) => c.id === activeCategory)?.desc}
+                    </p>
+                  </div>
 
-              {/* Submit Buttons */}
-              <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-                <span className="text-[11px] text-slate-400">
-                  Data 5W akan tersimpan dan tersinkronisasi ke laporan audit investigasi.
-                </span>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="inline-flex items-center space-x-2 px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition disabled:opacity-50"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>{isSaving ? 'Menyimpan...' : 'Simpan Lembar 5W'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
+                  <button
+                    type="button"
+                    onClick={handleAiSuggest}
+                    disabled={isGeneratingAi}
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold border border-indigo-200 transition"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{isGeneratingAi ? 'Menganalisis...' : `Saran AI (${activeCategory})`}</span>
+                  </button>
+                </div>
+
+                {/* 1. Root Cause */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    1. Root Cause (Akar Masalah Utama) <span className="text-rose-500">*</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={form.rootCause}
+                    onChange={(e) => setForm({ ...form, rootCause: e.target.value })}
+                    required
+                    placeholder={`Akar masalah mendasar dari dimensi ${activeCategory}...`}
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* 2. Contributing Factors */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    2. Contributing Factors (Faktor-Faktor Pemicu / Pendukung)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={form.contributingFactors}
+                    onChange={(e) => setForm({ ...form, contributingFactors: e.target.value })}
+                    placeholder="Faktor lingkungan kerja, tekanan target, kelalaian supervisi, atau ketiadaan panduan..."
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* 3. Impact */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    3. Impact (Dampak terhadap Karyawan / Operasional Pabrik) <span className="text-rose-500">*</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={form.impact}
+                    onChange={(e) => setForm({ ...form, impact: e.target.value })}
+                    required
+                    placeholder="Dampak moral kerja, penurunan produktivitas lini produksi, risiko ketidakpatuhan regulasi..."
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* 4. Corrective Recommendations */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    4. Corrective Recommendations (Rekomendasi Tindakan Korektif &amp; Preventif) <span className="text-rose-500">*</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={form.correctiveRecommendations}
+                    onChange={(e) => setForm({ ...form, correctiveRecommendations: e.target.value })}
+                    required
+                    placeholder="Langkah nyata perbaikan yang wajib diadopsi dalam rencana aksi (CAPA)..."
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* Footer Save */}
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                  <span className="text-xs text-slate-500">
+                    Analis: <strong className="text-slate-700">{currentUser?.displayName}</strong>
+                  </span>
+
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-xs transition"
+                  >
+                    <Save className="w-4 h-4" />
+                    <span>{isSaving ? 'Menyimpan...' : `Simpan Dimensi ${activeCategory}`}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
         </div>
-      ) : null}
+      </div>
     </div>
   );
 };

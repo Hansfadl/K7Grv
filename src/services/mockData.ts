@@ -22,7 +22,7 @@ export const GRIEVANCE_INSTRUMENTS: GrievanceInstrument[] = [
 // Kosongkan semua data user awal agar user menambahkan sendiri
 export const INITIAL_USERS: UserProfile[] = [];
 
-// 12 Kategori yang dirancang oleh user (SLA: Minor 3 Hari, Major 7 Hari, Critical 14 Hari)
+// 12 Kategori standard SJI (SLA: Critical 3 Hari / 72 Jam Eskalasi, Major 7 Hari, Minor 14 Hari)
 export const INITIAL_CATEGORIES: MasterCategory[] = [
   {
     id: 'cat-01',
@@ -47,7 +47,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Lingkungan Kerja',
     code: 'LK',
     defaultPriority: 'Minor',
-    slaDays: 3,
+    slaDays: 14,
     description: 'Kondisi sirkulasi udara, kebisingan, suhu area kerja, atau hubungan interpersonal sesama rekan kerja.',
     active: true,
   },
@@ -56,8 +56,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Pelecehan',
     code: 'PLH',
     defaultPriority: 'Critical',
-    slaDays: 14,
-    description: 'Pelecehan verbal, fisik, seksual, intimidasi, atau tindakan perundungan (bullying).',
+    slaDays: 3,
+    description: 'Pelecehan verbal, fisik, seksual, intimidasi, atau tindakan perundungan (bullying). Wajib eskalasi 72 jam.',
     active: true,
   },
   {
@@ -65,7 +65,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Cuti',
     code: 'CT',
     defaultPriority: 'Minor',
-    slaDays: 3,
+    slaDays: 14,
     description: 'Kendala pengajuan cuti tahunan, cuti melahirkan/keguguran, cuti sakit, atau persetujuan hak cuti.',
     active: true,
   },
@@ -83,7 +83,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Fasilitas',
     code: 'FSL',
     defaultPriority: 'Minor',
-    slaDays: 3,
+    slaDays: 14,
     description: 'Fasilitas kantin, toilet, musala, loker, area parkir, klinik pabrik, atau transportasi jemputan.',
     active: true,
   },
@@ -92,8 +92,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Keamanan',
     code: 'KMN',
     defaultPriority: 'Critical',
-    slaDays: 14,
-    description: 'Bahaya K3/HSE, ketiadaan APD, mesin tanpa pelindung darurat, bahaya kebakaran, atau kehilangan barang.',
+    slaDays: 3,
+    description: 'Bahaya K3/HSE, ketiadaan APD, mesin tanpa pelindung darurat, bahaya kebakaran, atau kehilangan barang. Wajib eskalasi 72 jam.',
     active: true,
   },
   {
@@ -110,7 +110,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'People Development',
     code: 'PPD',
     defaultPriority: 'Minor',
-    slaDays: 3,
+    slaDays: 14,
     description: 'Peluang pelatihan/skill training, program sertifikasi operator, kejelasan jenjang karier, atau promosi.',
     active: true,
   },
@@ -128,7 +128,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Absensi',
     code: 'ABS',
     defaultPriority: 'Minor',
-    slaDays: 3,
+    slaDays: 14,
     description: 'Masalah mesin fingerprint/face recognition, ketidaktercatatan jam masuk, atau rekonsiliasi keterlambatan.',
     active: true,
   }

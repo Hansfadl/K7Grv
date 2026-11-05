@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { UserProfile, UserRole, MasterDepartment, AuditLog } from '../types';
+import { UserProfile, UserRole, MasterDepartment } from '../types';
 import { INITIAL_DEPARTMENTS } from '../services/mockData';
-import { getDepartments, subscribeToAuditLogs } from '../services/db';
+import { getDepartments } from '../services/db';
 import {
   Users,
   Plus,
@@ -23,9 +23,7 @@ import {
   CheckCircle2,
   Building2,
   UserCheck,
-  Laptop,
-  Clock,
-  History
+  Clock
 } from 'lucide-react';
 
 export const UserManagementView: React.FC = () => {
@@ -57,20 +55,12 @@ export const UserManagementView: React.FC = () => {
   });
   const [showFormPin, setShowFormPin] = useState(false);
 
-  const [activeViewTab, setActiveViewTab] = useState<'directory' | 'access_logs'>('directory');
-  const [accessLogs, setAccessLogs] = useState<AuditLog[]>([]);
-
   useEffect(() => {
     getDepartments().then((depts) => {
       if (depts && depts.length > 0) {
         setDepartments(depts);
       }
     });
-
-    const unsubscribe = subscribeToAuditLogs((logs) => {
-      setAccessLogs(logs || []);
-    });
-    return () => unsubscribe();
   }, []);
 
   const resetForm = () => {
@@ -296,34 +286,7 @@ export const UserManagementView: React.FC = () => {
         </div>
       </div>
 
-      {/* View Switcher: Directory vs Access & Login Logs */}
-      <div className="flex border-b border-slate-200 space-x-4 text-xs font-semibold">
-        <button
-          onClick={() => setActiveViewTab('directory')}
-          className={`pb-2.5 px-1 border-b-2 flex items-center space-x-1.5 transition ${
-            activeViewTab === 'directory'
-              ? 'border-blue-600 text-blue-700 font-bold'
-              : 'border-transparent text-slate-500 hover:text-slate-900'
-          }`}
-        >
-          <Users className="w-4 h-4" />
-          <span>Direktori Personil ({availableUsers.length})</span>
-        </button>
-        <button
-          onClick={() => setActiveViewTab('access_logs')}
-          className={`pb-2.5 px-1 border-b-2 flex items-center space-x-1.5 transition ${
-            activeViewTab === 'access_logs'
-              ? 'border-blue-600 text-blue-700 font-bold'
-              : 'border-transparent text-slate-500 hover:text-slate-900'
-          }`}
-        >
-          <Laptop className="w-4 h-4" />
-          <span>Riwayat Akses &amp; Login Perangkat ({accessLogs.length})</span>
-        </button>
-      </div>
-
-      {activeViewTab === 'directory' ? (
-        <>
+      {/* Direktori Personil */}
           {/* Search & Filter Bar */}
           <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             {/* Search Input */}
@@ -536,86 +499,7 @@ export const UserManagementView: React.FC = () => {
           </tbody>
         </table>
       </div>
-    </>
-  ) : (
-    /* Access Logs View */
-    <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-      <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50">
-        <div>
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center space-x-1.5">
-            <Laptop className="w-4 h-4 text-blue-600" />
-            <span>Log Riwayat Akses &amp; Login Perangkat (Cloud Firestore)</span>
-          </h3>
-          <p className="text-[11px] text-slate-500 mt-0.5">
-            Mencatat personil yang mengakses sistem, waktu login, jenis perangkat, dan browser secara otomatis
-          </p>
-        </div>
-        <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center space-x-1.5 w-fit">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>Real-Time Audit Sync</span>
-        </span>
-      </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase text-[10px] font-semibold">
-              <th className="py-3 px-4">Waktu Akses</th>
-              <th className="py-3 px-4">Personil</th>
-              <th className="py-3 px-4">Role &amp; Departemen</th>
-              <th className="py-3 px-4">Perangkat &amp; Browser</th>
-              <th className="py-3 px-4">Detail Aktivitas</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {accessLogs.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="py-12 text-center text-slate-400">
-                  <div className="max-w-xs mx-auto space-y-1">
-                    <History className="w-7 h-7 mx-auto text-slate-300" />
-                    <p className="font-semibold text-slate-700">Belum ada riwayat aktivitas akses</p>
-                    <p className="text-[11px] text-slate-400">
-                      Setiap sesi login dari perangkat manapun akan tercatat otomatis di sini.
-                    </p>
-                  </div>
-                </td>
-              </tr>
-            ) : (
-              accessLogs.map((log) => (
-                <tr key={log.id} className="hover:bg-slate-50/80 transition">
-                  <td className="py-2.5 px-4 font-mono text-[11px] text-slate-600 whitespace-nowrap">
-                    <div className="flex items-center space-x-1.5">
-                      <Clock className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
-                      <span>{log.timestamp}</span>
-                    </div>
-                  </td>
-                  <td className="py-2.5 px-4 font-bold text-slate-900">
-                    {log.userName}
-                  </td>
-                  <td className="py-2.5 px-4">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                      {log.userRole}
-                    </span>
-                  </td>
-                  <td className="py-2.5 px-4 text-slate-700 text-[11px]">
-                    <div className="flex items-center space-x-1">
-                      <Laptop className="w-3 h-3 text-slate-400 flex-shrink-0" />
-                      <span className="truncate max-w-[220px]" title={log.device}>
-                        {log.device || 'Web Browser'}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="py-2.5 px-4 text-slate-600 text-[11px]">
-                    {log.details}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )}
 
       {/* Provision / Edit Modal */}
       {showAddModal && (

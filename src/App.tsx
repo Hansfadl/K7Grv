@@ -29,6 +29,8 @@ const AppContent: React.FC = () => {
   const [currentModule, setCurrentModule] = useState<AppModule>('dashboard');
   const { openCaseDetail } = useCases();
 
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
   if (!currentUser) {
     return <LoginView />;
   }
@@ -40,11 +42,19 @@ const AppContent: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 antialiased">
       {/* Top Corporate Navigation Header */}
-      <Header />
+      <Header
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+      />
 
       {/* Main Workspace with Sidebar & Dynamic View */}
       <div className="flex-1 flex overflow-hidden">
-        <Sidebar currentModule={currentModule} onSelectModule={setCurrentModule} />
+        <Sidebar
+          currentModule={currentModule}
+          onSelectModule={setCurrentModule}
+          isOpen={isSidebarOpen}
+          onToggle={() => setIsSidebarOpen(false)}
+        />
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="max-w-7xl mx-auto">
@@ -87,8 +97,16 @@ const AppContent: React.FC = () => {
               <ReportsView initialType="monthly" key="monthly" />
             )}
 
+            {currentModule === 'quarterly_report' && (
+              <ReportsView initialType="quarterly" key="quarterly" />
+            )}
+
             {currentModule === 'annual_report' && (
               <ReportsView initialType="annual" key="annual" />
+            )}
+
+            {currentModule === 'custom_report' && (
+              <ReportsView initialType="custom" key="custom" />
             )}
 
             {currentModule === 'master_data' && (

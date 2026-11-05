@@ -1,4 +1,4 @@
-import { GrievanceCase, RootCauseAnalysis } from '../types';
+import { GrievanceCase, RootCauseAnalysis, InvestigationRecord, ActionPlan, Rca6MCategory } from '../types';
 
 export async function generateCaseAiSummary(caseData: GrievanceCase): Promise<string> {
   try {
@@ -18,14 +18,33 @@ Status terkini: ${caseData.status}. Saluran masuk: ${caseData.channelReceived}.`
   }
 }
 
+export async function generateAiInvestigationSummary(
+  caseData: GrievanceCase,
+  investigationData: Partial<InvestigationRecord>
+): Promise<string> {
+  try {
+    const res = await fetch('/api/ai/investigation-summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseData, investigationData }),
+    });
+    if (!res.ok) throw new Error('Failed to generate investigation summary');
+    const data = await res.json();
+    return data.summary;
+  } catch (err: any) {
+    return `Investigasi terhadap pengaduan #${caseData.ticketId} di departemen ${caseData.department} telah dilaksanakan dengan pengumpulan keterangan saksi dan pembuktian dokumenter.`;
+  }
+}
+
 export async function generateAiRootCause(
-  caseData: GrievanceCase
+  caseData: GrievanceCase,
+  category?: Rca6MCategory
 ): Promise<Partial<RootCauseAnalysis>> {
   try {
     const res = await fetch('/api/ai/root-cause-suggest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caseData }),
+      body: JSON.stringify({ caseData, category }),
     });
     if (!res.ok) throw new Error('Failed to generate root cause');
     const data = await res.json();
@@ -33,15 +52,30 @@ export async function generateAiRootCause(
   } catch (err: any) {
     console.warn('AI RCA fetch notice:', err);
     return {
-      primaryCategory: 'Management & Leadership',
-      why1: `Ketidaksesuaian operasional terkait ${caseData.complaintCategory}.`,
-      why2: 'Komunikasi standar kerja antar tingkatan belum optimal.',
-      why3: 'Pengawasan dan tindak lanjut keluhan sebelumnya belum terdokumentasi rapi.',
-      why4: 'Belum adanya evaluasi berkala kepatuhan operasional di departemen terkait.',
-      why5: 'Sistem pengawasan dan evaluasi PIC belum dijalankan secara konsisten.',
-      systemicFactors: 'Kebutuhan standardisasi SOP dan penegakan komunikasi berkala di area kerja.',
-      preventiveRecommendations: 'Pelatihan penyegaran kepemimpinan dan audit berkala oleh tim HR.',
+      category: category || 'Method',
+      rootCause: `Ketidaksesuaian prosedur operasional terkait ${caseData.complaintCategory}.`,
+      contributingFactors: 'Komunikasi standar kerja antar tingkatan belum optimal.',
+      impact: 'Potensi friksi dan penurunan kenyamanan kerja karyawan.',
+      correctiveRecommendations: 'Penyegaran SOP dan pengawasan berkala oleh PIC Departemen.',
     };
+  }
+}
+
+export async function generateAiCapaSummary(
+  caseData: GrievanceCase,
+  actionPlans: ActionPlan[]
+): Promise<string> {
+  try {
+    const res = await fetch('/api/ai/capa-summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseData, actionPlans }),
+    });
+    if (!res.ok) throw new Error('Failed to generate CAPA summary');
+    const data = await res.json();
+    return data.summary;
+  } catch (err) {
+    return `Terdapat ${actionPlans.length} item CAPA terdaftar untuk kasus #${caseData.ticketId}. Status perbaikan dipantau secara berkala oleh PIC.`;
   }
 }
 
@@ -49,13 +83,14 @@ export async function generateAiReportNarrative(
   period: string,
   stats: any,
   categoryStats: any,
-  deptStats: any
+  deptStats: any,
+  rankings?: any
 ): Promise<string> {
   try {
     const res = await fetch('/api/ai/report-narrative', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ period, stats, categoryStats, deptStats }),
+      body: JSON.stringify({ period, stats, categoryStats, deptStats, rankings }),
     });
     if (!res.ok) throw new Error('Failed to generate narrative');
     const data = await res.json();

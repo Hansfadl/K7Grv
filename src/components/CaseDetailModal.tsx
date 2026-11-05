@@ -1,19 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { GrievanceCase, InvestigationFinding, RootCauseAnalysis, ActionPlan, CommunicationLog, EvidenceItem, CaseStatus } from '../types';
+import {
+  GrievanceCase,
+  InvestigationRecord,
+  RootCauseAnalysis,
+  Rca6MCategory,
+  ActionPlan,
+  CommunicationLog,
+  EvidenceItem,
+  CaseStatus,
+  CapaProgressStatus
+} from '../types';
 import { useCases } from '../context/CaseContext';
 import { useAuth } from '../context/AuthContext';
 import {
-  getCaseFindings,
-  addCaseFinding,
-  getCaseRootCause,
+  getCaseInvestigations,
+  saveCaseInvestigation,
+  getCaseRootCauses,
   saveCaseRootCause,
   getCaseActionPlans,
   addCaseActionPlan,
-  updateActionPlanStatus,
+  updateCaseActionPlan,
+  deleteCaseActionPlan,
   getCaseCommunications,
   addCaseCommunication,
   getCaseEvidence,
   addCaseEvidence,
+  deleteCaseEvidence,
 } from '../services/db';
 import {
   X,
@@ -27,10 +39,8 @@ import {
   Send,
   Plus,
   FileText,
-  FileCheck,
   Search,
   MessageSquare,
-  Paperclip,
   Check,
   Calendar,
   Lock,
@@ -38,13 +48,34 @@ import {
   ArrowRight,
   Trash2,
   Sparkles,
-  Copy,
   Eye,
   Download,
-  ExternalLink,
-  FileIcon
+  FileIcon,
+  Edit3,
+  RefreshCw,
+  Upload,
+  CheckSquare,
+  Wrench,
+  Cog,
+  Box,
+  Scale,
+  Compass
 } from 'lucide-react';
-import { generateCaseAiSummary, generateAiRootCause } from '../services/ai';
+import {
+  generateCaseAiSummary,
+  generateAiInvestigationSummary,
+  generateAiRootCause
+} from '../services/ai';
+import { EditCaseModal } from './EditCaseModal';
+
+const CATEGORIES_6M: { id: Rca6MCategory; label: string; icon: any }[] = [
+  { id: 'Man', label: 'Man (Manusia)', icon: User },
+  { id: 'Method', label: 'Method (Metode)', icon: Wrench },
+  { id: 'Machine', label: 'Machine (Mesin)', icon: Cog },
+  { id: 'Material', label: 'Material (Bahan)', icon: Box },
+  { id: 'Measurement', label: 'Measurement (Pengukuran)', icon: Scale },
+  { id: 'Environment', label: 'Environment (Lingkungan)', icon: Compass },
+];
 
 export const CaseDetailModal: React.FC = () => {
   const {
@@ -57,14 +88,508 @@ export const CaseDetailModal: React.FC = () => {
     setDetailActiveTab,
   } = useCases();
 
-  const { currentUser, confidentialMode, canApprove, canInvestigate, canDeleteCase } = useAuth();
+  const { currentUser, canInvestigate, canDeleteCase } = useAuth();
 
-  // Delete case state (salah input)
+  // Edit Case Modal
+  const [showEditModal, setShowEditModal] = useState(false);
+
+  // Delete case state
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteReason, setDeleteReason] = useState('Salah input data keluhan');
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Subcollections data
+  const [investigations, setInvestigations] = useState<InvestigationRecord[]>([]);
+  const [rcaList, setRcaList] = useState<RootCauseAnalysis[]>([]);
+  const [actionPlans, setActionPlans] = useState<ActionPlan[]>([]);
+  const [communications, setCommunications] = useState<CommunicationLog[]>([]);
+  const [evidenceList, setEvidenceList] = useState<EvidenceItem[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // 1. Investigation Form State (9 Fields, NO signatures)
+  const [invForm, setInvForm] = useState({
+    investigationDate: new Date().toISOString().substring(0, 10),
+    investigationDetails: '',
+    interviewNotes: '',
+    witnessInfo: '',
+    supportingInfo: '',
+    evidenceRef: '',
+    findings: '',
+    conclusion: '',
+    recommendedActions: '',
+  });
+  const [isSavingInv, setIsSavingInv] = useState(false);
+  const [invNotice, setInvNotice] = useState<string | null>(null);
+
+  // 2. RCA 6M State
+  const [activeRcaCategory, setActiveRcaCategory] = useState<Rca6MCategory>('Man');
+  const [rcaForm, setRcaForm] = useState({
+    rootCause: '',
+    contributingFactors: '',
+    impact: '',
+    correctiveRecommendations: '',
+  });
+  const [isSavingRca, setIsSavingRca] = useState(false);
+  const [rcaNotice, setRcaNotice] = useState<string | null>(null);
+
+  // 3. CAPA Plan Form & Modal State (8 Fields, 2 Statuses: Progress | Completed)
+  const [showCapaModal, setShowCapaModal] = useState(false);
+  const [editingCapa, setEditingCapa] = useState<ActionPlan | null>(null);
+  const [capaForm, setCapaForm] = useState({
+    description: '',
+    responsiblePic: '',
+    targetDate: new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10),
+    actionTaken: '',
+    progressStatus: 'Progress' as CapaProgressStatus,
+    completionDate: '',
+    notes: '',
+  });
+  const [isSavingCapa, setIsSavingCapa] = useState(false);
+
+  // 4. Evidence State & Upload Modal
+  const [showEvidenceModal, setShowEvidenceModal] = useState(false);
+  const [previewEvidence, setPreviewEvidence] = useState<EvidenceItem | null>(null);
+  const [replaceTargetEvidence, setReplaceTargetEvidence] = useState<EvidenceItem | null>(null);
+  const [evidenceTitle, setEvidenceTitle] = useState('');
+  const [evidenceCategory, setEvidenceCategory] = useState<EvidenceItem['category']>('Document');
+  const [evidenceConfidential, setEvidenceConfidential] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<{
+    name: string;
+    size: string;
+    type: string;
+    dataUrl: string;
+  } | null>(null);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
+
+  // 5. Communication Log Form State (6 Fields)
+  const [showCommForm, setShowCommForm] = useState(false);
+  const [commForm, setCommForm] = useState({
+    date: new Date().toISOString().substring(0, 10),
+    channel: 'Email' as CommunicationLog['channel'],
+    communicator: currentUser?.displayName || '',
+    recipient: '',
+    details: '',
+    followUpNotes: '',
+    isConfidential: true,
+  });
+  const [isSavingComm, setIsSavingComm] = useState(false);
+
+  // AI Summary State
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+
+  // Load subcollections for the active case
+  useEffect(() => {
+    if (!selectedCase) return;
+    setIsLoading(true);
+    setAiSummary(null);
+    setInvNotice(null);
+    setRcaNotice(null);
+
+    Promise.all([
+      getCaseInvestigations(selectedCase.id),
+      getCaseRootCauses(selectedCase.id),
+      getCaseActionPlans(selectedCase.id),
+      getCaseCommunications(selectedCase.id),
+      getCaseEvidence(selectedCase.id, currentUser),
+    ]).then(([invs, rcas, plans, comms, evs]) => {
+      setInvestigations(invs);
+      if (invs.length > 0) {
+        const latest = invs[0];
+        setInvForm({
+          investigationDate: latest.investigationDate || new Date().toISOString().substring(0, 10),
+          investigationDetails: latest.investigationDetails || '',
+          interviewNotes: latest.interviewNotes || '',
+          witnessInfo: latest.witnessInfo || '',
+          supportingInfo: latest.supportingInfo || '',
+          evidenceRef: latest.evidenceRef || '',
+          findings: latest.findings || '',
+          conclusion: latest.conclusion || '',
+          recommendedActions: latest.recommendedActions || '',
+        });
+      } else {
+        setInvForm({
+          investigationDate: new Date().toISOString().substring(0, 10),
+          investigationDetails: `Pemeriksaan keluhan #${selectedCase.ticketId}: ${selectedCase.complaintCategory}`,
+          interviewNotes: '',
+          witnessInfo: '',
+          supportingInfo: '',
+          evidenceRef: '',
+          findings: '',
+          conclusion: '',
+          recommendedActions: '',
+        });
+      }
+
+      setRcaList(rcas);
+      const matchRca = rcas.find((item) => item.category === activeRcaCategory);
+      if (matchRca) {
+        setRcaForm({
+          rootCause: matchRca.rootCause || '',
+          contributingFactors: matchRca.contributingFactors || '',
+          impact: matchRca.impact || '',
+          correctiveRecommendations: matchRca.correctiveRecommendations || '',
+        });
+      }
+
+      setActionPlans(plans);
+      setCommunications(comms);
+      setEvidenceList(evs);
+      setIsLoading(false);
+    });
+  }, [selectedCase?.id, currentUser?.id]);
+
+  // Sync RCA Form when active 6M tab changes
+  useEffect(() => {
+    const matchRca = rcaList.find((item) => item.category === activeRcaCategory);
+    if (matchRca) {
+      setRcaForm({
+        rootCause: matchRca.rootCause || '',
+        contributingFactors: matchRca.contributingFactors || '',
+        impact: matchRca.impact || '',
+        correctiveRecommendations: matchRca.correctiveRecommendations || '',
+      });
+    } else {
+      setRcaForm({
+        rootCause: '',
+        contributingFactors: '',
+        impact: '',
+        correctiveRecommendations: '',
+      });
+    }
+  }, [activeRcaCategory, rcaList]);
+
+  if (!isDetailModalOpen || !selectedCase) return null;
+
+  // 1. STRICT 4 STAGE WORKFLOW: OPEN -> INVESTIGATION -> ACTION TAKEN -> CLOSED
+  const STAGES: { status: CaseStatus; label: string; desc: string }[] = [
+    { status: 'Open', label: 'OPEN', desc: 'Kasus Diterima' },
+    { status: 'Investigation', label: 'INVESTIGATION', desc: 'Pemeriksaan Lapangan' },
+    { status: 'Action Taken', label: 'ACTION TAKEN', desc: 'Tindakan Korektif (CAPA)' },
+    { status: 'Closed', label: 'CLOSED', desc: 'Selesai & Disetujui' },
+  ];
+
+  const currentStageIndex = STAGES.findIndex((s) => s.status === selectedCase.status);
+
+  const handleAdvanceStage = async (newStatus: CaseStatus) => {
+    let progress = 15;
+    if (newStatus === 'Investigation') progress = 45;
+    else if (newStatus === 'Action Taken') progress = 80;
+    else if (newStatus === 'Closed') progress = 100;
+
+    const updates: Partial<GrievanceCase> = {
+      status: newStatus,
+      progress,
+      closingDate: newStatus === 'Closed' ? new Date().toISOString().substring(0, 10) : null,
+      approvedBy: newStatus === 'Closed' ? currentUser?.displayName : null,
+    };
+
+    await handleUpdateCase(selectedCase.id, updates, `Status diperbarui menjadi ${newStatus}`);
+  };
+
+  // 2. Save Investigation (9 Fields, internal info, NO signatures)
+  const handleSaveInvestigation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setIsSavingInv(true);
+    setInvNotice(null);
+    try {
+      const saved = await saveCaseInvestigation(
+        selectedCase.id,
+        {
+          caseId: selectedCase.id,
+          ticketId: selectedCase.ticketId,
+          investigationDate: invForm.investigationDate,
+          investigationDetails: invForm.investigationDetails,
+          interviewNotes: invForm.interviewNotes,
+          witnessInfo: invForm.witnessInfo,
+          supportingInfo: invForm.supportingInfo,
+          evidenceRef: invForm.evidenceRef,
+          findings: invForm.findings,
+          conclusion: invForm.conclusion,
+          recommendedActions: invForm.recommendedActions,
+          investigatorName: currentUser.displayName,
+          investigatorId: currentUser.id,
+          createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        },
+        currentUser
+      );
+      setInvestigations((prev) => [saved, ...prev.filter((i) => i.id !== saved.id)]);
+      setInvNotice('Data investigasi 9-field berhasil disimpan ke Firestore.');
+
+      // Auto advance to Investigation if currently Open
+      if (selectedCase.status === 'Open') {
+        await handleAdvanceStage('Investigation');
+      }
+      setTimeout(() => setInvNotice(null), 3500);
+    } catch (err: any) {
+      setInvNotice('Gagal menyimpan: ' + err.message);
+    } finally {
+      setIsSavingInv(false);
+    }
+  };
+
+  // 3. Save 6M Ishikawa RCA
+  const handleSaveRca = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setIsSavingRca(true);
+    setRcaNotice(null);
+    try {
+      const saved = await saveCaseRootCause(
+        selectedCase.id,
+        {
+          caseId: selectedCase.id,
+          ticketId: selectedCase.ticketId,
+          category: activeRcaCategory,
+          rootCause: rcaForm.rootCause,
+          contributingFactors: rcaForm.contributingFactors,
+          impact: rcaForm.impact,
+          correctiveRecommendations: rcaForm.correctiveRecommendations,
+          analystId: currentUser.id,
+          analystName: currentUser.displayName,
+          updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        },
+        currentUser
+      );
+      setRcaList((prev) => {
+        const filtered = prev.filter((item) => item.category !== activeRcaCategory);
+        return [...filtered, saved];
+      });
+      setRcaNotice(`Analisis 6M (${activeRcaCategory}) tersimpan.`);
+      setTimeout(() => setRcaNotice(null), 3500);
+    } catch (err: any) {
+      setRcaNotice('Gagal menyimpan RCA: ' + err.message);
+    } finally {
+      setIsSavingRca(false);
+    }
+  };
+
+  // 4. Save CAPA Plan (8 Fields, 2 Statuses, working revision support)
+  const handleOpenAddCapa = () => {
+    setEditingCapa(null);
+    setCapaForm({
+      description: '',
+      responsiblePic: selectedCase.assignedPic || currentUser?.displayName || '',
+      targetDate: new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10),
+      actionTaken: '',
+      progressStatus: 'Progress',
+      completionDate: '',
+      notes: '',
+    });
+    setShowCapaModal(true);
+  };
+
+  const handleOpenEditCapa = (plan: ActionPlan) => {
+    setEditingCapa(plan);
+    setCapaForm({
+      description: plan.description || plan.title || '',
+      responsiblePic: plan.responsiblePic || plan.assignedTo || '',
+      targetDate: plan.targetDate || '',
+      actionTaken: plan.actionTaken || '',
+      progressStatus: (plan.progressStatus === 'Completed' || plan.status === 'Completed' ? 'Completed' : 'Progress'),
+      completionDate: plan.completionDate || (plan.progressStatus === 'Completed' ? new Date().toISOString().substring(0, 10) : ''),
+      notes: plan.notes || '',
+    });
+    setShowCapaModal(true);
+  };
+
+  const handleSaveCapaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setIsSavingCapa(true);
+
+    try {
+      if (editingCapa) {
+        await updateCaseActionPlan(
+          selectedCase.id,
+          editingCapa.id,
+          {
+            description: capaForm.description,
+            responsiblePic: capaForm.responsiblePic,
+            targetDate: capaForm.targetDate,
+            actionTaken: capaForm.actionTaken,
+            progressStatus: capaForm.progressStatus,
+            completionDate: capaForm.progressStatus === 'Completed' ? (capaForm.completionDate || new Date().toISOString().substring(0, 10)) : null,
+            notes: capaForm.notes,
+          },
+          currentUser
+        );
+        setActionPlans((prev) =>
+          prev.map((p) =>
+            p.id === editingCapa.id
+              ? {
+                  ...p,
+                  description: capaForm.description,
+                  responsiblePic: capaForm.responsiblePic,
+                  targetDate: capaForm.targetDate,
+                  actionTaken: capaForm.actionTaken,
+                  progressStatus: capaForm.progressStatus,
+                  completionDate: capaForm.progressStatus === 'Completed' ? (capaForm.completionDate || new Date().toISOString().substring(0, 10)) : null,
+                  notes: capaForm.notes,
+                }
+              : p
+          )
+        );
+      } else {
+        const added = await addCaseActionPlan(
+          selectedCase.id,
+          {
+            ticketId: selectedCase.ticketId,
+            caseId: selectedCase.id,
+            description: capaForm.description,
+            responsiblePic: capaForm.responsiblePic,
+            targetDate: capaForm.targetDate,
+            actionTaken: capaForm.actionTaken,
+            progressStatus: capaForm.progressStatus,
+            completionDate: capaForm.progressStatus === 'Completed' ? (capaForm.completionDate || new Date().toISOString().substring(0, 10)) : null,
+            notes: capaForm.notes,
+          },
+          currentUser
+        );
+        setActionPlans((prev) => [...prev, added]);
+
+        // Auto update case progress towards Action Taken
+        if (selectedCase.status === 'Open' || selectedCase.status === 'Investigation') {
+          await handleAdvanceStage('Action Taken');
+        }
+      }
+      setShowCapaModal(false);
+    } catch (err) {
+      console.error('Error saving CAPA:', err);
+    } finally {
+      setIsSavingCapa(false);
+    }
+  };
+
+  // 5. Evidence file handling
+  const handleEvidenceFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.pdf'].includes(ext)) {
+      setEvidenceError('Format harus JPG, JPEG, PNG, atau PDF.');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setEvidenceError('Ukuran file maksimal 10 MB.');
+      return;
+    }
+
+    setEvidenceError(null);
+    const sizeStr = `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSelectedFile({
+        name: file.name,
+        size: sizeStr,
+        type: file.type || (ext === '.pdf' ? 'application/pdf' : 'image/jpeg'),
+        dataUrl: reader.result as string,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveEvidenceUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !selectedFile) {
+      setEvidenceError('Harap pilih berkas bukti.');
+      return;
+    }
+    setIsUploadingEvidence(true);
+    try {
+      if (replaceTargetEvidence) {
+        await deleteCaseEvidence(selectedCase.id, replaceTargetEvidence.id, currentUser);
+      }
+      const added = await addCaseEvidence(
+        selectedCase.id,
+        {
+          caseId: selectedCase.id,
+          ticketId: selectedCase.ticketId,
+          title: evidenceTitle.trim() || selectedFile.name,
+          category: evidenceCategory,
+          fileName: selectedFile.name,
+          fileSize: selectedFile.size,
+          fileType: selectedFile.type,
+          fileData: selectedFile.dataUrl,
+          isConfidential: evidenceConfidential,
+          uploadedBy: currentUser.displayName,
+          uploadedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+          chainOfCustody: `Diverifikasi dan diarsipkan oleh ${currentUser.displayName}.`,
+        },
+        currentUser
+      );
+
+      setEvidenceList((prev) => [added, ...prev.filter((e) => e.id !== replaceTargetEvidence?.id)]);
+      setShowEvidenceModal(false);
+      setReplaceTargetEvidence(null);
+      setSelectedFile(null);
+      setEvidenceTitle('');
+    } catch (err: any) {
+      setEvidenceError('Gagal mengunggah bukti: ' + err.message);
+    } finally {
+      setIsUploadingEvidence(false);
+    }
+  };
+
+  // 6. Save Communication Log (6 Fields)
+  const handleSaveComm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setIsSavingComm(true);
+    try {
+      const added = await addCaseCommunication(
+        selectedCase.id,
+        {
+          caseId: selectedCase.id,
+          ticketId: selectedCase.ticketId,
+          date: commForm.date,
+          channel: commForm.channel,
+          communicator: commForm.communicator || currentUser.displayName,
+          recipient: commForm.recipient,
+          details: commForm.details,
+          followUpNotes: commForm.followUpNotes,
+          isConfidential: commForm.isConfidential,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        },
+        currentUser
+      );
+      setCommunications((prev) => [added, ...prev]);
+      setShowCommForm(false);
+      setCommForm({
+        date: new Date().toISOString().substring(0, 10),
+        channel: 'Email',
+        communicator: currentUser.displayName,
+        recipient: '',
+        details: '',
+        followUpNotes: '',
+        isConfidential: true,
+      });
+    } catch (err) {
+      console.warn('Error saving comm:', err);
+    } finally {
+      setIsSavingComm(false);
+    }
+  };
+
+  // AI Summary Generator
+  const handleGenerateAiSummary = async () => {
+    setIsGeneratingAi(true);
+    try {
+      const summary = await generateCaseAiSummary(selectedCase);
+      setAiSummary(summary);
+    } catch (err) {
+      console.warn('AI Summary error:', err);
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
+
+  // Confirm delete case
   const confirmDeleteCase = async () => {
     if (!selectedCase) return;
     setIsDeleting(true);
@@ -74,488 +599,116 @@ export const CaseDetailModal: React.FC = () => {
       setShowDeleteModal(false);
       setIsDetailModalOpen(false);
     } catch (err: any) {
-      setDeleteError(err.message || 'Gagal menghapus data keluhan.');
+      setDeleteError(err.message || 'Gagal menghapus kasus.');
     } finally {
       setIsDeleting(false);
     }
   };
 
-  // Subcollection state
-  const [findings, setFindings] = useState<InvestigationFinding[]>([]);
-  const [rootCause, setRootCause] = useState<RootCauseAnalysis | null>(null);
-  const [actionPlans, setActionPlans] = useState<ActionPlan[]>([]);
-  const [communications, setCommunications] = useState<CommunicationLog[]>([]);
-  const [evidenceList, setEvidenceList] = useState<EvidenceItem[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-
-  // Form states for new subcollection items
-  const [showAddFinding, setShowAddFinding] = useState(false);
-  const [newFinding, setNewFinding] = useState({
-    title: '',
-    intervieweeName: '',
-    interviewType: 'Witness' as InvestigationFinding['interviewType'],
-    dateConducted: new Date().toISOString().substring(0, 10),
-    keyFindings: '',
-    statementSummary: '',
-    credibilityAssessment: 'Verified reliable.',
-  });
-
-  // RCA Form
-  const [rcaForm, setRcaForm] = useState({
-    primaryCategory: 'Management & Leadership' as RootCauseAnalysis['primaryCategory'],
-    why1: '',
-    why2: '',
-    why3: '',
-    why4: '',
-    why5: '',
-    systemicFactors: '',
-    preventiveRecommendations: '',
-  });
-
-  // Action Plan Form
-  const [showAddAction, setShowAddAction] = useState(false);
-  const [newAction, setNewAction] = useState({
-    title: '',
-    description: '',
-    type: 'Corrective' as ActionPlan['type'],
-    assignedTo: '',
-    assignedRole: 'Department PIC',
-    targetDate: new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10),
-  });
-
-  // Comm Form
-  const [newComm, setNewComm] = useState({
-    type: 'Internal Note' as CommunicationLog['type'],
-    subject: '',
-    content: '',
-    recipient: 'HR Investigation Team',
-    isConfidential: true,
-  });
-
-  // Evidence Form & File Upload State (Supports Photo & PDF)
-  const [showAddEvidence, setShowAddEvidence] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<{
-    name: string;
-    size: string;
-    type: string;
-    dataUrl: string;
-  } | null>(null);
-  const [previewEvidence, setPreviewEvidence] = useState<EvidenceItem | null>(null);
-
-  const [newEvidence, setNewEvidence] = useState({
-    title: '',
-    category: 'Document' as EvidenceItem['category'],
-    fileName: '',
-    fileSize: '1.2 MB',
-    isConfidential: false,
-    chainOfCustody: 'Logged by authorized investigator.',
-  });
-
-  // AI Generation States
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
-  const [isGeneratingAiSummary, setIsGeneratingAiSummary] = useState(false);
-  const [isGeneratingAiRca, setIsGeneratingAiRca] = useState(false);
-  const [rcaSaveNotice, setRcaSaveNotice] = useState<string | null>(null);
-
-  // Load subcollections only when selectedCase ID changes (preserves in-progress 5W typing)
-  useEffect(() => {
-    if (!selectedCase) return;
-    setIsLoading(true);
-    setAiSummary(null);
-    setRcaSaveNotice(null);
-
-    Promise.all([
-      getCaseFindings(selectedCase.id),
-      getCaseRootCause(selectedCase.id),
-      getCaseActionPlans(selectedCase.id),
-      getCaseCommunications(selectedCase.id),
-      getCaseEvidence(selectedCase.id, currentUser),
-    ]).then(([fnds, rca, plans, comms, evs]) => {
-      setFindings(fnds);
-      setRootCause(rca);
-      if (rca) {
-        setRcaForm({
-          primaryCategory: rca.primaryCategory || 'Management & Leadership',
-          why1: rca.why1 || '',
-          why2: rca.why2 || '',
-          why3: rca.why3 || '',
-          why4: rca.why4 || '',
-          why5: rca.why5 || '',
-          systemicFactors: rca.systemicFactors || '',
-          preventiveRecommendations: rca.preventiveRecommendations || '',
-        });
-      } else {
-        setRcaForm({
-          primaryCategory: 'Management & Leadership',
-          why1: '',
-          why2: '',
-          why3: '',
-          why4: '',
-          why5: '',
-          systemicFactors: '',
-          preventiveRecommendations: '',
-        });
-      }
-      setActionPlans(plans);
-      setCommunications(comms);
-      setEvidenceList(evs);
-      setIsLoading(false);
-    });
-  }, [selectedCase?.id, currentUser?.id]);
-
-  if (!isDetailModalOpen || !selectedCase) return null;
-
-  // Siklus 4 Tahapan Kasus SJI: Open -> Investigation -> Action Taken -> Closed
-  const STATUS_FLOW: CaseStatus[] = [
-    'Open',
-    'Investigation',
-    'Action Taken',
-    'Closed',
-  ];
-
-  const currentStatusIndex = STATUS_FLOW.indexOf(selectedCase.status);
-
-  // Status Updater
-  const handleStatusChange = async (newStatus: CaseStatus) => {
-    let progress = selectedCase.progress;
-    if (newStatus === 'Open') progress = 15;
-    else if (newStatus === 'Investigation') progress = 45;
-    else if (newStatus === 'Action Taken') progress = 80;
-    else if (newStatus === 'Closed') progress = 100;
-
-    const updates: Partial<GrievanceCase> = {
-      status: newStatus,
-      progress,
-      closingDate: newStatus === 'Closed' ? new Date().toISOString().substring(0, 10) : selectedCase.closingDate,
-      approvedBy: newStatus === 'Closed' ? currentUser?.displayName : selectedCase.approvedBy,
-    };
-
-    await handleUpdateCase(selectedCase.id, updates, `Status advanced to ${newStatus}`);
-  };
-
-  // Add Investigation Finding
-  const handleSaveFinding = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser) return;
-    const item = await addCaseFinding(
-      selectedCase.id,
-      {
-        ...newFinding,
-        caseId: selectedCase.id,
-        investigatorName: currentUser.displayName,
-        investigatorId: currentUser.id,
-        createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      },
-      currentUser
-    );
-    setFindings((prev) => [item, ...prev]);
-    setShowAddFinding(false);
-    setNewFinding({
-      title: '',
-      intervieweeName: '',
-      interviewType: 'Witness',
-      dateConducted: new Date().toISOString().substring(0, 10),
-      keyFindings: '',
-      statementSummary: '',
-      credibilityAssessment: 'Verified reliable.',
-    });
-  };
-
-  // Save RCA
-  const handleSaveRca = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser || !selectedCase) return;
-    const item = await saveCaseRootCause(
-      selectedCase.id,
-      {
-        ...rcaForm,
-        caseId: selectedCase.id,
-        analystId: currentUser.id,
-        analystName: currentUser.displayName,
-        updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      },
-      currentUser
-    );
-    setRootCause(item);
-    setRcaSaveNotice('Lembar 5W berhasil disimpan dan diperbarui.');
-    setTimeout(() => setRcaSaveNotice(null), 3500);
-  };
-
-  // AI 5W Sugestion
-  const handleAiSuggestRca = async () => {
-    if (!selectedCase) return;
-    setIsGeneratingAiRca(true);
-    try {
-      const suggestion = await generateAiRootCause(selectedCase);
-      setRcaForm((prev) => ({
-        ...prev,
-        primaryCategory: suggestion.primaryCategory || prev.primaryCategory,
-        why1: suggestion.why1 || prev.why1,
-        why2: suggestion.why2 || prev.why2,
-        why3: suggestion.why3 || prev.why3,
-        why4: suggestion.why4 || prev.why4,
-        why5: suggestion.why5 || prev.why5,
-        systemicFactors: suggestion.systemicFactors || prev.systemicFactors,
-        preventiveRecommendations: suggestion.preventiveRecommendations || prev.preventiveRecommendations,
-      }));
-      setRcaSaveNotice('Sugesti Lembar 5W berhasil dihasilkan AI.');
-      setTimeout(() => setRcaSaveNotice(null), 3500);
-    } catch (err: any) {
-      alert('Gagal menghasilkan AI root cause: ' + err.message);
-    } finally {
-      setIsGeneratingAiRca(false);
-    }
-  };
-
-  // AI Case Summary Generation
-  const handleGenerateAiSummary = async () => {
-    if (!selectedCase) return;
-    setIsGeneratingAiSummary(true);
-    try {
-      const summary = await generateCaseAiSummary(selectedCase);
-      setAiSummary(summary);
-    } catch (err: any) {
-      alert('Gagal membuat ringkasan AI: ' + err.message);
-    } finally {
-      setIsGeneratingAiSummary(false);
-    }
-  };
-
-  // Add Action Plan
-  const handleSaveAction = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser) return;
-    const item = await addCaseActionPlan(
-      selectedCase.id,
-      {
-        ...newAction,
-        caseId: selectedCase.id,
-        status: 'In Progress',
-        createdAt: new Date().toISOString().substring(0, 10),
-      },
-      currentUser
-    );
-    setActionPlans((prev) => [...prev, item]);
-    setShowAddAction(false);
-    setNewAction({
-      title: '',
-      description: '',
-      type: 'Corrective',
-      assignedTo: '',
-      assignedRole: 'Department PIC',
-      targetDate: new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10),
-    });
-  };
-
-  // Update Action Status (Toggle between Completed & In Progress)
-  const handleActionStatusChange = async (planId: string, status: ActionPlan['status']) => {
-    if (!currentUser) return;
-    await updateActionPlanStatus(selectedCase.id, planId, status, currentUser, 'Verified by authorized staff');
-    setActionPlans((prev) =>
-      prev.map((p) =>
-        p.id === planId
-          ? {
-              ...p,
-              status,
-              completedDate: status === 'Completed' ? new Date().toISOString().substring(0, 10) : undefined,
-            }
-          : p
-      )
-    );
-  };
-
-  // Add Communication Log
-  const handleSaveComm = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser || !newComm.subject.trim() || !newComm.content.trim()) return;
-    const item = await addCaseCommunication(
-      selectedCase.id,
-      {
-        ...newComm,
-        caseId: selectedCase.id,
-        senderName: currentUser.displayName,
-        senderRole: currentUser.role,
-        senderId: currentUser.id,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      },
-      currentUser
-    );
-    setCommunications((prev) => [item, ...prev]);
-    setNewComm({
-      type: 'Internal Note',
-      subject: '',
-      content: '',
-      recipient: 'HR Investigation Team',
-      isConfidential: true,
-    });
-  };
-
-  // File Upload Handler (Photo or PDF)
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const sizeKb = (file.size / 1024).toFixed(1) + ' KB';
-      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-      setSelectedFile({
-        name: file.name,
-        size: sizeKb,
-        type: file.type || (isPdf ? 'application/pdf' : 'image/jpeg'),
-        dataUrl: reader.result as string,
-      });
-      setNewEvidence((prev) => ({
-        ...prev,
-        fileName: file.name,
-        fileSize: sizeKb,
-        title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
-        category: isPdf ? 'Document' : 'Photo',
-      }));
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Add Evidence (Saves Photo / PDF)
-  const handleSaveEvidence = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser || !newEvidence.title.trim()) return;
-    const item = await addCaseEvidence(
-      selectedCase.id,
-      {
-        ...newEvidence,
-        caseId: selectedCase.id,
-        fileName: selectedFile?.name || newEvidence.fileName || 'dokumen_terlampir.pdf',
-        fileSize: selectedFile?.size || newEvidence.fileSize,
-        fileData: selectedFile?.dataUrl || undefined,
-        fileType: selectedFile?.type || (newEvidence.fileName.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
-        uploadedBy: currentUser.displayName,
-        uploadedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      },
-      currentUser
-    );
-    setEvidenceList((prev) => [item, ...prev]);
-    setShowAddEvidence(false);
-    setSelectedFile(null);
-    setNewEvidence({
-      title: '',
-      category: 'Document',
-      fileName: '',
-      fileSize: '1.2 MB',
-      isConfidential: false,
-      chainOfCustody: 'Logged by authorized investigator.',
-    });
-  };
-
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+      <div className="bg-white rounded-2xl max-w-5xl w-full border border-slate-200 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
         {/* Header Bar */}
-        <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between border-b border-slate-800">
+        <div className="p-4 sm:p-5 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center space-x-3">
-            <div className="px-2.5 py-1 rounded bg-blue-600 font-mono font-bold text-sm tracking-wider">
-              {selectedCase.ticketId}
-            </div>
+            <span className="font-mono text-xs font-bold text-blue-400 bg-slate-800 px-2.5 py-1 rounded border border-slate-700">
+              #{selectedCase.ticketId}
+            </span>
             <div>
-              <div className="flex items-center space-x-2">
-                <h3 className="font-bold text-base text-white">
-                  {selectedCase.complaintCategory}
-                </h3>
-                <span
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                    selectedCase.priority === 'Critical'
-                      ? 'bg-rose-500 text-white'
-                      : selectedCase.priority === 'Major'
-                      ? 'bg-amber-500 text-slate-900'
-                      : 'bg-slate-700 text-slate-200'
-                  }`}
-                >
-                  {selectedCase.priority} Priority
-                </span>
-              </div>
+              <h2 className="font-bold text-base text-white">{selectedCase.complaintCategory}</h2>
               <p className="text-xs text-slate-400">
-                Departemen: <span className="text-slate-200 font-semibold">{selectedCase.department}</span> •
-                Saluran: <span className="text-blue-300 font-bold px-1.5 py-0.5 rounded bg-blue-950 border border-blue-800">{selectedCase.channelReceived || 'Online'}</span> •
-                Diterima: {selectedCase.dateReceived} • SLA: <span
-                  className={
-                    selectedCase.slaStatus === 'Breached'
-                      ? 'text-rose-400 font-bold'
-                      : 'text-emerald-400 font-semibold'
-                  }
-                >
-                  {selectedCase.slaStatus}
-                </span>
+                Departemen: <strong className="text-slate-200">{selectedCase.department}</strong> • Tanggal Keluhan:{' '}
+                <strong className="text-slate-200 font-mono">{selectedCase.dateReceived}</strong>
               </p>
             </div>
           </div>
 
           <div className="flex items-center space-x-2">
+            {/* Edit Case Button */}
+            <button
+              onClick={() => setShowEditModal(true)}
+              className="inline-flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Edit Keluhan</span>
+            </button>
+
+            {/* Delete Case (Salah Input) */}
             {canDeleteCase && (
               <button
-                type="button"
-                onClick={() => {
-                  setDeleteReason('Salah input data keluhan');
-                  setDeleteError(null);
-                  setShowDeleteModal(true);
-                }}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 hover:bg-rose-600 hover:text-white border border-rose-500/30 text-xs font-semibold transition"
-                title="Hapus keluhan jika terjadi salah input"
+                onClick={() => setShowDeleteModal(true)}
+                title="Hapus Kasus (Salah Input)"
+                className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800 transition text-xs"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Hapus Kasus (Salah Input)</span>
+                <Trash2 className="w-4 h-4" />
               </button>
             )}
+
             <button
               onClick={() => setIsDetailModalOpen(false)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              className="p-1 text-slate-400 hover:text-white rounded-lg transition"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* Status Lifecycle Stepper */}
-        <div className="bg-slate-50 border-b border-slate-200 px-6 py-3">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 mb-2">
-            <span>Case Progression Lifecycle</span>
-            <span>Current Stage: <strong className="text-blue-700">{selectedCase.status}</strong></span>
-          </div>
-          <div className="grid grid-cols-4 gap-2">
-            {STATUS_FLOW.map((st, idx) => {
-              const isPast = idx < currentStatusIndex;
-              const isCurrent = idx === currentStatusIndex;
+        {/* 1. VISUAL 4-STAGE TIMELINE (OPEN -> INVESTIGATION -> ACTION TAKEN -> CLOSED) */}
+        <div className="bg-slate-50 border-b border-slate-200 px-6 py-4">
+          <div className="flex items-center justify-between max-w-3xl mx-auto relative">
+            {/* Connecting bar */}
+            <div className="absolute top-1/2 left-6 right-6 -translate-y-1/2 h-1 bg-slate-200 z-0">
+              <div
+                className="h-1 bg-blue-600 transition-all duration-300"
+                style={{
+                  width: `${(currentStageIndex / (STAGES.length - 1)) * 100}%`,
+                }}
+              />
+            </div>
+
+            {STAGES.map((stage, idx) => {
+              const isPassed = idx < currentStageIndex;
+              const isCurrent = idx === currentStageIndex;
+
               return (
-                <button
-                  key={st}
-                  disabled={currentUser?.role === 'department_pic' && idx > currentStatusIndex + 1}
-                  onClick={() => handleStatusChange(st)}
-                  className={`py-2 px-2 rounded-lg text-center text-[11px] font-bold border transition ${
-                    isCurrent
-                      ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                      : isPast
-                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                      : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'
-                  }`}
-                >
-                  <div className="truncate">{idx + 1}. {st}</div>
-                  <div className="text-[9px] font-normal opacity-85">
-                    {isCurrent ? 'Tahap Aktif' : isPast ? 'Selesai' : 'Berikutnya'}
-                  </div>
-                </button>
+                <div key={stage.status} className="relative z-10 flex flex-col items-center">
+                  <button
+                    onClick={() => handleAdvanceStage(stage.status)}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center font-mono font-bold text-xs transition border-2 ${
+                      isPassed
+                        ? 'bg-blue-600 border-blue-600 text-white'
+                        : isCurrent
+                        ? 'bg-white border-blue-600 text-blue-700 ring-4 ring-blue-100 shadow-md'
+                        : 'bg-white border-slate-300 text-slate-400'
+                    }`}
+                  >
+                    {isPassed ? <Check className="w-4 h-4" /> : idx + 1}
+                  </button>
+                  <span
+                    className={`text-xs mt-1 font-bold ${
+                      isCurrent ? 'text-blue-700' : isPassed ? 'text-slate-800' : 'text-slate-400'
+                    }`}
+                  >
+                    {stage.label}
+                  </span>
+                  <span className="text-[10px] text-slate-400 hidden sm:block">
+                    {stage.desc}
+                  </span>
+                </div>
               );
             })}
           </div>
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex border-b border-slate-200 px-6 bg-white overflow-x-auto">
+        <div className="bg-white border-b border-slate-200 px-4 flex items-center space-x-1 overflow-x-auto text-xs font-semibold">
           {[
-            { id: 'overview', label: 'Overview & Details', icon: FileText },
-            { id: 'investigation', label: `Investigation (${findings.length})`, icon: Search },
-            { id: 'root_cause', label: 'Root Cause (5 Whys)', icon: GitFork },
-            { id: 'action_plan', label: `Action Plan (${actionPlans.length})`, icon: FileCheck },
-            { id: 'communication', label: `Communications (${communications.length})`, icon: MessageSquare },
-            { id: 'evidence', label: `Evidence Vault (${evidenceList.length})`, icon: Paperclip },
+            { id: 'overview', label: 'Overview Kasus', icon: Eye },
+            { id: 'investigation', label: 'Investigation (9 Field)', icon: Search },
+            { id: 'root_cause', label: 'RCA (6M Ishikawa)', icon: GitFork },
+            { id: 'action_plan', label: 'CAPA Plan', icon: CheckSquare },
+            { id: 'evidence', label: `Evidence (${evidenceList.length})`, icon: FileText },
+            { id: 'communication', label: `Komunikasi (${communications.length})`, icon: MessageSquare },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = detailActiveTab === tab.id;
@@ -563,1092 +716,962 @@ export const CaseDetailModal: React.FC = () => {
               <button
                 key={tab.id}
                 onClick={() => setDetailActiveTab(tab.id as any)}
-                className={`flex items-center space-x-1.5 py-3 px-3 text-xs font-semibold border-b-2 whitespace-nowrap transition ${
+                className={`py-3 px-3.5 border-b-2 transition flex items-center space-x-1.5 whitespace-nowrap ${
                   isActive
-                    ? 'border-blue-600 text-blue-700'
-                    : 'border-transparent text-slate-500 hover:text-slate-900'
+                    ? 'border-blue-600 text-blue-700 font-bold'
+                    : 'border-transparent text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
+                <Icon className="w-4 h-4" />
                 <span>{tab.label}</span>
               </button>
             );
           })}
         </div>
 
-        {/* Tab Body Content */}
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+        {/* Tab Contents */}
+        <div className="p-5 overflow-y-auto flex-1 space-y-5">
           {/* TAB 1: OVERVIEW */}
           {detailActiveTab === 'overview' && (
-            <div className="space-y-6">
-              {/* Complainant Identity Card */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                  <div className="flex items-center space-x-2">
-                    <User className="w-4 h-4 text-blue-600" />
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                      Reporter &amp; Case Personnel
-                    </h4>
-                  </div>
-                  {selectedCase.isAnonymous && (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300 flex items-center space-x-1">
-                      <Lock className="w-3 h-3 text-emerald-600" />
-                      <span>Protected Whistleblower Record</span>
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Complainant / Reporter</span>
-                    <span className="font-bold text-slate-900 text-sm">
-                      {selectedCase.isAnonymous
-                        ? confidentialMode
-                          ? `${selectedCase.anonymousAlias || 'Whistleblower'} [Protected]`
-                          : `${selectedCase.anonymousAlias} [UNMASKED]`
-                        : selectedCase.employeeName}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Assigned Department PIC</span>
-                    <span className="font-semibold text-slate-800 text-sm">{selectedCase.assignedPic || 'Unassigned'}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Description & Intake Details */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-4">
+            <div className="space-y-4">
+              {/* Metadata Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
                 <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 mb-1">
-                    Grievance Description (Received via Internal Portal)
-                  </h4>
-                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-800 leading-relaxed whitespace-pre-wrap">
-                    {selectedCase.description}
-                  </div>
+                  <span className="text-slate-500 block text-[11px]">Prioritas SLA</span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[11px] font-bold inline-block mt-0.5 ${
+                      selectedCase.priority === 'Critical'
+                        ? 'bg-rose-100 text-rose-800'
+                        : selectedCase.priority === 'Major'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-emerald-100 text-emerald-800'
+                    }`}
+                  >
+                    {selectedCase.priority}
+                  </span>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                  <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Incident Date</span>
-                    <span className="font-medium text-slate-800">{selectedCase.incidentDate || 'Not specified'}</span>
-                  </div>
-                  <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Incident Location</span>
-                    <span className="font-medium text-slate-800">{selectedCase.location || 'Company premises'}</span>
-                  </div>
-                  <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
-                    <span className="text-slate-400 block text-[10px] uppercase font-semibold">Involved Parties</span>
-                    <span className="font-medium text-slate-800">{selectedCase.involvedParties || 'Under inquiry'}</span>
-                  </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Target Selesai (Due Date)</span>
+                  <span className="font-mono font-bold text-slate-800 text-[11px] block mt-0.5">
+                    {selectedCase.dueDate || '-'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Responsible PIC</span>
+                  <span className="font-bold text-slate-800 text-[11px] block mt-0.5 truncate">
+                    {selectedCase.assignedPic || 'Belum ditugaskan'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[11px]">Saluran Pengaduan</span>
+                  <span className="font-bold text-slate-800 text-[11px] block mt-0.5">
+                    {selectedCase.channelReceived}
+                  </span>
                 </div>
               </div>
 
-              {/* AI Executive Summary & Investigation Notes */}
-              <div className="bg-gradient-to-br from-white to-blue-50/50 rounded-xl border border-blue-200 p-5 shadow-xs space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 pb-3">
-                  <div className="flex items-center space-x-2">
-                    <Sparkles className="w-4 h-4 text-blue-600" />
-                    <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-blue-950">
-                        Ringkasan Eksekutif &amp; Catatan Investigasi (AI Generated)
-                      </h4>
-                      <p className="text-[11px] text-blue-800">
-                        Sintesis keluhan, identifikasi risiko, dan rekomendasi investigasi cerdas via Gemini AI
-                      </p>
-                    </div>
-                  </div>
+              {/* Complainant & Protected Reporter Info */}
+              <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                  Identitas Pelapor
+                </h4>
+                <div className="flex items-center justify-between text-xs text-slate-700">
+                  <span>Nama: <strong>{selectedCase.isAnonymous ? selectedCase.anonymousAlias || 'Protected Whistleblower' : selectedCase.employeeName}</strong></span>
+                  <span>NIK / NIK Pelapor: <strong>{selectedCase.isAnonymous ? 'Dirahasiakan (Anonim)' : selectedCase.employeeNik || '-'}</strong></span>
+                </div>
+              </div>
 
+              {/* Complaint Description */}
+              <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    Uraian Keluhan (Description)
+                  </h4>
                   <button
-                    type="button"
                     onClick={handleGenerateAiSummary}
-                    disabled={isGeneratingAiSummary}
-                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition disabled:opacity-50"
+                    disabled={isGeneratingAi}
+                    className="inline-flex items-center space-x-1 text-[11px] font-bold text-blue-600 hover:text-blue-800"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>{isGeneratingAiSummary ? 'Menganalisis Kasus...' : 'Generate Ringkasan AI'}</span>
+                    <span>{isGeneratingAi ? 'Menganalisis...' : 'Rangkuman AI'}</span>
                   </button>
                 </div>
+                <div className="p-3 bg-slate-50 rounded-lg text-xs text-slate-800 leading-relaxed whitespace-pre-line border border-slate-100">
+                  {selectedCase.description}
+                </div>
 
-                {aiSummary ? (
-                  <div className="space-y-3">
-                    <div className="p-3.5 bg-white rounded-lg border border-blue-200 text-xs text-slate-800 leading-relaxed whitespace-pre-wrap font-sans">
-                      {aiSummary}
+                {aiSummary && (
+                  <div className="p-3 bg-indigo-50/80 rounded-lg border border-indigo-200 text-xs text-indigo-950 space-y-1">
+                    <div className="font-bold flex items-center space-x-1 text-indigo-800">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Hasil Analisis AI (Ringkasan Kasus)</span>
                     </div>
-                    <div className="flex justify-end space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(aiSummary);
-                          alert('Ringkasan AI disalin ke clipboard.');
-                        }}
-                        className="inline-flex items-center space-x-1 px-3 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Salin Ringkasan</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          await handleUpdateCase(selectedCase.id, {
-                            resolutionSummary: aiSummary,
-                          });
-                          alert('Ringkasan AI berhasil diterapkan sebagai Resolution Summary.');
-                        }}
-                        className="inline-flex items-center space-x-1 px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-2xs transition"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Terapkan ke Ringkasan Kasus</span>
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4 bg-white/70 rounded-lg border border-dashed border-blue-200 text-center text-xs text-slate-500">
-                    Klik tombol <strong>"Generate Ringkasan AI"</strong> untuk membuat analisis komprehensif, poin investigasi, dan rekomendasi CAPA secara otomatis.
+                    <p className="whitespace-pre-line text-[11px] leading-relaxed">{aiSummary}</p>
                   </div>
                 )}
               </div>
-
-              {/* Resolution Summary (If resolved/closed) */}
-              {(selectedCase.resolutionSummary || selectedCase.status === 'Closed') && (
-                <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4 shadow-xs">
-                  <div className="flex items-center space-x-2 text-emerald-900 font-bold text-xs uppercase tracking-wider mb-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    <span>Resolution Summary &amp; Executive Sign-off</span>
-                  </div>
-                  <p className="text-xs text-emerald-950 leading-relaxed whitespace-pre-wrap">
-                    {selectedCase.resolutionSummary || 'Resolution documented and agreed upon by Department PIC.'}
-                  </p>
-                  {selectedCase.closureRemarks && (
-                    <div className="mt-2 text-xs text-emerald-800 border-t border-emerald-200 pt-2">
-                      <strong>Closure Remarks:</strong> {selectedCase.closureRemarks}
-                    </div>
-                  )}
-                  {selectedCase.approvedBy && (
-                    <div className="mt-2 text-[11px] text-emerald-700 font-semibold">
-                      Approved By: {selectedCase.approvedBy} on {selectedCase.closingDate || 'Recent'}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           )}
 
-          {/* TAB 2: INVESTIGATION */}
+          {/* TAB 2: INVESTIGATION (9 FIELDS, NO SIGNATURE) */}
           {detailActiveTab === 'investigation' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900">Investigation Findings &amp; Interviews</h4>
-                  <p className="text-xs text-slate-500">Document witness interviews, depositions, and facts</p>
+            <form onSubmit={handleSaveInvestigation} className="space-y-4">
+              <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-900 flex items-start space-x-2">
+                <Lock className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="space-y-0.5 text-[11px]">
+                  <p className="font-bold">Investigasi Internal Standar HR SJI (Tanpa Signature)</p>
+                  <p>
+                    Data pemeriksa ({currentUser?.displayName}) tersimpan secara internal untuk audit trail. Bagian tanda tangan resmi dihilangkan sesuai ketentuan.
+                  </p>
                 </div>
-                {canInvestigate && (
-                  <button
-                    onClick={() => setShowAddFinding(true)}
-                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Log Interview / Finding</span>
-                  </button>
-                )}
               </div>
 
-              {/* Add Finding Form */}
-              {showAddFinding && (
-                <form onSubmit={handleSaveFinding} className="bg-white p-4 rounded-xl border border-blue-200 shadow-sm space-y-3">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="text-xs font-bold text-blue-900">New Investigation Entry</span>
-                    <button type="button" onClick={() => setShowAddFinding(false)} className="text-slate-400 hover:text-slate-600">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      placeholder="Title / Hearing Topic *"
-                      required
-                      value={newFinding.title}
-                      onChange={(e) => setNewFinding({ ...newFinding, title: e.target.value })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Interviewee Name *"
-                      required
-                      value={newFinding.intervieweeName}
-                      onChange={(e) => setNewFinding({ ...newFinding, intervieweeName: e.target.value })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                    />
-                    <select
-                      value={newFinding.interviewType}
-                      onChange={(e) => setNewFinding({ ...newFinding, interviewType: e.target.value as any })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                    >
-                      <option value="Complainant">Complainant</option>
-                      <option value="Accused / Respondent">Accused / Respondent</option>
-                      <option value="Witness">Witness</option>
-                      <option value="Subject Matter Expert">Subject Matter Expert</option>
-                    </select>
-                  </div>
-                  <textarea
-                    placeholder="Key findings and material facts established *"
-                    required
-                    rows={3}
-                    value={newFinding.keyFindings}
-                    onChange={(e) => setNewFinding({ ...newFinding, keyFindings: e.target.value })}
-                    className="w-full px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                  />
-                  <div className="flex justify-end space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAddFinding(false)}
-                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded"
-                    >
-                      Save Finding
-                    </button>
-                  </div>
-                </form>
+              {invNotice && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-lg flex items-center">
+                  <CheckCircle2 className="w-4 h-4 mr-1.5 text-emerald-600" />
+                  <span>{invNotice}</span>
+                </div>
               )}
 
-              {/* Findings List */}
-              <div className="space-y-3">
-                {findings.length === 0 ? (
-                  <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-slate-400 text-xs">
-                    No investigation interviews logged yet for this case.
-                  </div>
-                ) : (
-                  findings.map((fnd) => (
-                    <div key={fnd.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-900 text-xs">{fnd.title}</span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                            {fnd.interviewType}: {fnd.intervieweeName}
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-slate-400">{fnd.dateConducted}</span>
-                      </div>
-                      <p className="text-xs text-slate-700 leading-relaxed">{fnd.keyFindings}</p>
-                      {fnd.statementSummary && (
-                        <div className="p-2.5 bg-slate-50 rounded border border-slate-100 text-[11px] text-slate-600 italic">
-                          "{fnd.statementSummary}"
-                        </div>
-                      )}
-                      <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-100">
-                        <span>Investigator: {fnd.investigatorName}</span>
-                        <span>Credibility: {fnd.credibilityAssessment}</span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 3: ROOT CAUSE ANALYSIS (5 WHYS) */}
-          {detailActiveTab === 'root_cause' && (
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <h4 className="text-sm font-bold text-slate-900 flex items-center space-x-1.5">
-                    <GitFork className="w-4 h-4 text-blue-600" />
-                    <span>Lembar 5W &amp; Root Cause Analysis (Ishikawa)</span>
-                  </h4>
-                  <p className="text-xs text-slate-500">Uncover underlying systemic breakdowns rather than symptoms</p>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    1. Investigation Date <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={invForm.investigationDate}
+                    onChange={(e) => setInvForm({ ...invForm, investigationDate: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 font-mono"
+                  />
                 </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    6. Evidence Reference
+                  </label>
+                  <input
+                    type="text"
+                    value={invForm.evidenceRef}
+                    onChange={(e) => setInvForm({ ...invForm, evidenceRef: e.target.value })}
+                    placeholder="Referensi bukti dokumen / foto / log cctv"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                  />
+                </div>
+              </div>
 
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  2. Investigation Details <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={invForm.investigationDetails}
+                  onChange={(e) => setInvForm({ ...invForm, investigationDetails: e.target.value })}
+                  required
+                  placeholder="Ruang lingkup pemeriksaan..."
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    3. Interview Notes
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={invForm.interviewNotes}
+                    onChange={(e) => setInvForm({ ...invForm, interviewNotes: e.target.value })}
+                    placeholder="Catatan wawancara terlapor / pelapor..."
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    4. Witness Information
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={invForm.witnessInfo}
+                    onChange={(e) => setInvForm({ ...invForm, witnessInfo: e.target.value })}
+                    placeholder="Informasi saksi di lokasi..."
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  5. Supporting Information
+                </label>
+                <input
+                  type="text"
+                  value={invForm.supportingInfo}
+                  onChange={(e) => setInvForm({ ...invForm, supportingInfo: e.target.value })}
+                  placeholder="Informasi pendukung / riwayat sebelumnya"
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  7. Findings (Temuan Pemeriksaan) <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={invForm.findings}
+                  onChange={(e) => setInvForm({ ...invForm, findings: e.target.value })}
+                  required
+                  placeholder="Fakta konkret yang ditemukan..."
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  8. Investigation Conclusion <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={invForm.conclusion}
+                  onChange={(e) => setInvForm({ ...invForm, conclusion: e.target.value })}
+                  required
+                  placeholder="Kesimpulan akhir investigasi..."
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  9. Recommended Actions <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={invForm.recommendedActions}
+                  onChange={(e) => setInvForm({ ...invForm, recommendedActions: e.target.value })}
+                  required
+                  placeholder="Rekomendasi tindakan pencegahan & perbaikan..."
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex justify-end">
                 <button
-                  type="button"
-                  onClick={handleAiSuggestRca}
-                  disabled={isGeneratingAiRca}
-                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold transition disabled:opacity-50"
+                  type="submit"
+                  disabled={isSavingInv}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>{isGeneratingAiRca ? 'Menganalisis...' : 'Sugesti 5W dengan AI'}</span>
+                  {isSavingInv ? 'Menyimpan...' : 'Simpan Data Investigasi'}
                 </button>
               </div>
+            </form>
+          )}
 
-              {rcaSaveNotice && (
-                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs flex items-center space-x-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                  <span>{rcaSaveNotice}</span>
+          {/* TAB 3: RCA 6M ISHIKAWA */}
+          {detailActiveTab === 'root_cause' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 border rounded-xl overflow-hidden bg-slate-100 p-1 gap-1">
+                {CATEGORIES_6M.map((cat) => {
+                  const Icon = cat.icon;
+                  const isActive = activeRcaCategory === cat.id;
+                  const hasData = rcaList.some((item) => item.category === cat.id && item.rootCause?.trim());
+
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setActiveRcaCategory(cat.id)}
+                      className={`flex flex-col items-center justify-center p-2 rounded-lg text-xs font-semibold transition relative ${
+                        isActive ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:bg-white/60'
+                      }`}
+                    >
+                      {hasData && (
+                        <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500" />
+                      )}
+                      <Icon className="w-4 h-4 mb-1" />
+                      <span className="text-[11px]">{cat.id}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {rcaNotice && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-lg flex items-center">
+                  <CheckCircle2 className="w-4 h-4 mr-1.5 text-emerald-600" />
+                  <span>{rcaNotice}</span>
                 </div>
               )}
 
-              <form onSubmit={handleSaveRca} className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
+              <form onSubmit={handleSaveRca} className="p-4 bg-white rounded-xl border border-slate-200 space-y-3">
+                <h4 className="text-xs font-bold text-slate-800">
+                  Analisis Dimensi: <span className="text-indigo-600">{activeRcaCategory}</span>
+                </h4>
+
                 <div>
-                  <label className="block text-xs font-bold text-slate-800 mb-1">
-                    Primary Ishikawa Root Cause Domain
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Root Cause (Akar Masalah) <span className="text-rose-500">*</span>
                   </label>
-                  <select
-                    value={rcaForm.primaryCategory}
-                    onChange={(e) => setRcaForm({ ...rcaForm, primaryCategory: e.target.value as any })}
-                    className="w-full sm:w-80 px-3 py-1.5 border border-slate-200 rounded text-xs bg-slate-50 font-medium"
-                  >
-                    <option value="Management & Leadership">Management &amp; Leadership</option>
-                    <option value="Process">Process &amp; Standard Operating Procedure</option>
-                    <option value="Policy">Company Policy &amp; Guidelines</option>
-                    <option value="People">People Competency / Training</option>
-                    <option value="Work Environment">Work Environment &amp; Psychological Safety</option>
-                    <option value="Equipment / System">Equipment / Digital System</option>
-                  </select>
+                  <textarea
+                    rows={2}
+                    value={rcaForm.rootCause}
+                    onChange={(e) => setRcaForm({ ...rcaForm, rootCause: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                  />
                 </div>
 
-                {/* 5 Whys Chain */}
-                <div className="space-y-2 border-l-2 border-blue-500 pl-4 my-2">
-                  {[1, 2, 3, 4, 5].map((num) => {
-                    const key = `why${num}` as keyof typeof rcaForm;
-                    return (
-                      <div key={num} className="space-y-1">
-                        <label className="block text-[11px] font-bold text-blue-900">
-                          Why #{num}:
-                        </label>
-                        <input
-                          type="text"
-                          value={rcaForm[key]}
-                          onChange={(e) => setRcaForm({ ...rcaForm, [key]: e.target.value })}
-                          placeholder={`Why did this happen? (Level ${num})`}
-                          className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-blue-500"
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-800 mb-1">
-                      Systemic Factors Identified
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Contributing Factors
                     </label>
                     <textarea
-                      rows={3}
-                      value={rcaForm.systemicFactors}
-                      onChange={(e) => setRcaForm({ ...rcaForm, systemicFactors: e.target.value })}
-                      placeholder="e.g. Inadequate supervisor dual-authorization checks, missing safety cutoff interlock..."
-                      className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
+                      rows={2}
+                      value={rcaForm.contributingFactors}
+                      onChange={(e) => setRcaForm({ ...rcaForm, contributingFactors: e.target.value })}
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-800 mb-1">
-                      Preventive Recommendations
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Impact (Dampak) <span className="text-rose-500">*</span>
                     </label>
                     <textarea
-                      rows={3}
-                      value={rcaForm.preventiveRecommendations}
-                      onChange={(e) => setRcaForm({ ...rcaForm, preventiveRecommendations: e.target.value })}
-                      placeholder="Long-term organizational adjustments to eliminate recurrence..."
-                      className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
+                      rows={2}
+                      value={rcaForm.impact}
+                      onChange={(e) => setRcaForm({ ...rcaForm, impact: e.target.value })}
+                      required
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
                     />
                   </div>
                 </div>
 
-                <div className="flex justify-end pt-2 border-t border-slate-100">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Corrective Recommendations <span className="text-rose-500">*</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={rcaForm.correctiveRecommendations}
+                    onChange={(e) => setRcaForm({ ...rcaForm, correctiveRecommendations: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                  />
+                </div>
+
+                <div className="pt-2 flex justify-end">
                   <button
                     type="submit"
-                    className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs"
+                    disabled={isSavingRca}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold"
                   >
-                    Save Root Cause Analysis
+                    {isSavingRca ? 'Menyimpan...' : `Simpan Dimensi ${activeRcaCategory}`}
                   </button>
                 </div>
               </form>
             </div>
           )}
 
-          {/* TAB 4: ACTION PLAN (CAPA) */}
+          {/* TAB 4: CAPA PLAN */}
           {detailActiveTab === 'action_plan' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="text-sm font-bold text-slate-900">Corrective &amp; Preventive Action Plans (CAPA)</h4>
-                  <p className="text-xs text-slate-500">Track assigned remediations and verification sign-offs</p>
+                  <h4 className="text-xs font-bold text-slate-900">Rencana Perbaikan &amp; Pencegahan (CAPA)</h4>
+                  <p className="text-[11px] text-slate-500">Status tegas: Progress | Completed. Revisi kapan saja.</p>
                 </div>
                 <button
-                  onClick={() => setShowAddAction(true)}
-                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition"
+                  type="button"
+                  onClick={handleOpenAddCapa}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>Add Action Item</span>
+                  <span>Tambah CAPA</span>
                 </button>
               </div>
 
-              {/* Add Action Form */}
-              {showAddAction && (
-                <form onSubmit={handleSaveAction} className="bg-white p-4 rounded-xl border border-blue-200 shadow-sm space-y-3">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="text-xs font-bold text-blue-900">New CAPA Remediation Task</span>
-                    <button type="button" onClick={() => setShowAddAction(false)} className="text-slate-400 hover:text-slate-600">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      placeholder="Action Title *"
-                      required
-                      value={newAction.title}
-                      onChange={(e) => setNewAction({ ...newAction, title: e.target.value })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                    />
-                    <select
-                      value={newAction.type}
-                      onChange={(e) => setNewAction({ ...newAction, type: e.target.value as any })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                    >
-                      <option value="Corrective">Corrective</option>
-                      <option value="Preventive">Preventive</option>
-                      <option value="Disciplinary">Disciplinary</option>
-                      <option value="Policy Amendment">Policy Amendment</option>
-                      <option value="Counseling/Mediation">Counseling/Mediation</option>
-                    </select>
-                    <input
-                      type="text"
-                      placeholder="Assignee (e.g. David Chen) *"
-                      required
-                      value={newAction.assignedTo}
-                      onChange={(e) => setNewAction({ ...newAction, assignedTo: e.target.value })}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                    />
-                  </div>
-                  <textarea
-                    placeholder="Specific actionable instructions..."
-                    rows={2}
-                    value={newAction.description}
-                    onChange={(e) => setNewAction({ ...newAction, description: e.target.value })}
-                    className="w-full px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                  />
-                  <div className="flex justify-end space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAddAction(false)}
-                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded"
-                    >
-                      Commit Action Plan
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* Action Plans Table */}
-              <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider text-[10px] font-semibold">
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3">Action Item</th>
-                      <th className="py-2.5 px-3">Assignee</th>
-                      <th className="py-2.5 px-3">Target Date</th>
-                      <th className="py-2.5 px-3">Status</th>
-                      <th className="py-2.5 px-3 text-right">Update</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {actionPlans.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="py-6 text-center text-slate-400">
-                          No CAPA action items assigned yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      actionPlans.map((plan) => (
-                        <tr key={plan.id} className="hover:bg-slate-50/60">
-                          <td className="py-2.5 px-3">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700">
-                              {plan.type}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="font-semibold text-slate-900">{plan.title}</div>
-                            {plan.description && <div className="text-[11px] text-slate-500">{plan.description}</div>}
-                          </td>
-                          <td className="py-2.5 px-3 font-medium text-slate-800">{plan.assignedTo}</td>
-                          <td className="py-2.5 px-3 text-slate-600">{plan.targetDate}</td>
-                          <td className="py-2.5 px-3">
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                plan.status === 'Completed' || plan.status === 'Verified'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : plan.status === 'In Progress'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}
-                            >
-                              {plan.status}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            {plan.status !== 'Verified' && (
-                              <div className="inline-flex items-center space-x-1.5 justify-end">
-                                <select
-                                  value={plan.status}
-                                  onChange={(e) => handleActionStatusChange(plan.id, e.target.value as any)}
-                                  className="py-1 px-1.5 text-[10px] font-semibold rounded border border-slate-300 bg-white text-slate-800"
-                                >
-                                  <option value="In Progress">In Progress</option>
-                                  <option value="Completed">Completed</option>
-                                  <option value="Pending">Pending</option>
-                                </select>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleActionStatusChange(
-                                      plan.id,
-                                      plan.status === 'Completed' ? 'In Progress' : 'Completed'
-                                    )
-                                  }
-                                  className={`px-2 py-1 text-[10px] font-bold rounded transition ${
-                                    plan.status === 'Completed'
-                                      ? 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
-                                      : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                  }`}
-                                >
-                                  {plan.status === 'Completed' ? 'Set In Progress' : 'Mark Completed'}
-                                </button>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 5: COMMUNICATION LOG */}
-          {detailActiveTab === 'communication' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900">Communication &amp; HR Memo Log</h4>
-                  <p className="text-xs text-slate-500">Official correspondence, legal advice, and internal case notes</p>
+              {actionPlans.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs border border-dashed rounded-xl">
+                  Belum ada rencana tindakan CAPA untuk kasus ini.
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-3">
+                  {actionPlans.map((plan) => {
+                    const isCompleted = plan.progressStatus === 'Completed' || plan.status === 'Completed';
 
-              {/* Compose New Memo/Note */}
-              <form onSubmit={handleSaveComm} className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <select
-                    value={newComm.type}
-                    onChange={(e) => setNewComm({ ...newComm, type: e.target.value as any })}
-                    className="px-2.5 py-1.5 border border-slate-200 rounded text-xs bg-slate-50"
-                  >
-                    <option value="Internal Note">Internal Note</option>
-                    <option value="Employee Correspondence">Employee Correspondence</option>
-                    <option value="Formal HR Memo">Formal HR Memo</option>
-                    <option value="Legal Consultation">Legal Consultation</option>
-                    <option value="Meeting Summary">Meeting Summary</option>
-                  </select>
-                  <input
-                    type="text"
-                    placeholder="Subject *"
-                    required
-                    value={newComm.subject}
-                    onChange={(e) => setNewComm({ ...newComm, subject: e.target.value })}
-                    className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Recipient / Stakeholders"
-                    value={newComm.recipient}
-                    onChange={(e) => setNewComm({ ...newComm, recipient: e.target.value })}
-                    className="px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                  />
-                </div>
-                <textarea
-                  placeholder="Memo contents or meeting notes..."
-                  required
-                  rows={2}
-                  value={newComm.content}
-                  onChange={(e) => setNewComm({ ...newComm, content: e.target.value })}
-                  className="w-full px-2.5 py-1.5 border border-slate-200 rounded text-xs"
-                />
-                <div className="flex items-center justify-between">
-                  <label className="flex items-center space-x-1.5 text-xs text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={newComm.isConfidential}
-                      onChange={(e) => setNewComm({ ...newComm, isConfidential: e.target.checked })}
-                      className="rounded text-blue-600"
-                    />
-                    <span>Mark as strictly confidential</span>
-                  </label>
-                  <button
-                    type="submit"
-                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded shadow-xs"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Log Message</span>
-                  </button>
-                </div>
-              </form>
-
-              {/* Log Timeline */}
-              <div className="space-y-3">
-                {communications.length === 0 ? (
-                  <div className="bg-white p-6 rounded-xl border border-slate-200 text-center text-slate-400 text-xs">
-                    No communication records recorded for this case.
-                  </div>
-                ) : (
-                  communications.map((comm) => (
-                    <div key={comm.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-900 text-xs">{comm.subject}</span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700">
-                            {comm.type}
+                    return (
+                      <div key={plan.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs text-slate-900">
+                            {plan.description || plan.title}
                           </span>
-                          {comm.isConfidential && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 flex items-center space-x-1">
-                              <Lock className="w-2.5 h-2.5 mr-0.5" />
-                              <span>Confidential</span>
-                            </span>
-                          )}
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isCompleted
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : 'bg-amber-100 text-amber-800 border border-amber-200'
+                            }`}
+                          >
+                            {isCompleted ? 'Completed' : 'Progress'}
+                          </span>
                         </div>
-                        <span className="text-[11px] text-slate-400">{comm.timestamp}</span>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] text-slate-600">
+                          <div>PIC: <strong>{plan.responsiblePic || plan.assignedTo || 'Unassigned'}</strong></div>
+                          <div>Target: <strong className="font-mono">{plan.targetDate || '-'}</strong></div>
+                          <div>Selesai: <strong className="font-mono">{plan.completionDate || '-'}</strong></div>
+                        </div>
+
+                        {plan.actionTaken && (
+                          <div className="text-xs text-slate-700 bg-white p-2.5 rounded border border-slate-100">
+                            Tindakan: {plan.actionTaken}
+                          </div>
+                        )}
+
+                        {plan.notes && (
+                          <div className="text-[11px] text-slate-500 italic">
+                            Catatan / Revisi: {plan.notes}
+                          </div>
+                        )}
+
+                        <div className="pt-2 flex justify-end space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditCapa(plan)}
+                            className="px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 bg-blue-50 rounded border border-blue-200 flex items-center space-x-1"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Mark Progress / Update (Revisi)</span>
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{comm.content}</p>
-                      <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-100 flex items-center justify-between">
-                        <span>From: <strong>{comm.senderName}</strong> ({comm.senderRole})</span>
-                        <span>Recipient: <strong>{comm.recipient}</strong></span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
-          {/* TAB 6: EVIDENCE VAULT */}
+          {/* TAB 5: EVIDENCE VAULT */}
           {detailActiveTab === 'evidence' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="text-sm font-bold text-slate-900">Secured Evidence Repository</h4>
-                  <p className="text-xs text-slate-500">Documents, audio logs, photos, and verified chain of custody</p>
+                  <h4 className="text-xs font-bold text-slate-900">Evidence Vault (JPG, JPEG, PNG, PDF)</h4>
+                  <p className="text-[11px] text-slate-500">Maksimal 10 MB per file terhubung dengan Ticket ID.</p>
                 </div>
-                {currentUser?.role !== 'department_pic' && (
-                  <button
-                    onClick={() => setShowAddEvidence(true)}
-                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Upload Evidence Record</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReplaceTargetEvidence(null);
+                    setSelectedFile(null);
+                    setEvidenceTitle('');
+                    setEvidenceError(null);
+                    setShowEvidenceModal(true);
+                  }}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Upload Bukti</span>
+                </button>
               </div>
 
-              {/* Add Evidence Form */}
-              {showAddEvidence && (
-                <form onSubmit={handleSaveEvidence} className="bg-white p-5 rounded-xl border border-blue-200 shadow-sm space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="text-xs font-bold text-blue-900">Unggah Bukti Baru (Foto / PDF)</span>
-                    <button type="button" onClick={() => setShowAddEvidence(false)} className="text-slate-400 hover:text-slate-600">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
+              {evidenceList.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs border border-dashed rounded-xl">
+                  Belum ada dokumen atau foto bukti yang diunggah.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {evidenceList.map((item) => {
+                    const isPdf = item.fileType?.includes('pdf') || item.fileName.toLowerCase().endsWith('.pdf');
 
-                  {/* File Selector Dropzone */}
-                  <div className="p-4 bg-slate-50 rounded-xl border-2 border-dashed border-blue-200 hover:border-blue-400 transition text-center">
-                    <input
-                      type="file"
-                      id="case-evidence-upload"
-                      accept="image/*,application/pdf,.pdf"
-                      onChange={handleFileSelect}
-                      className="hidden"
-                    />
-                    <label
-                      htmlFor="case-evidence-upload"
-                      className="cursor-pointer flex flex-col items-center justify-center space-y-2"
-                    >
-                      <Paperclip className="w-6 h-6 text-blue-600" />
-                      <span className="text-xs font-bold text-slate-800">
-                        {selectedFile ? selectedFile.name : 'Pilih Berkas Foto atau PDF dari Komputer / HP'}
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        {selectedFile
-                          ? `Ukuran: ${selectedFile.size} • Format: ${selectedFile.type}`
-                          : 'Format yang didukung: Foto (JPG, PNG, WebP) dan Dokumen PDF'}
-                      </span>
-                    </label>
-                  </div>
+                    return (
+                      <div key={item.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                        <div
+                          onClick={() => setPreviewEvidence(item)}
+                          className="h-28 bg-white rounded border overflow-hidden flex items-center justify-center cursor-pointer hover:opacity-90"
+                        >
+                          {!isPdf && item.fileData ? (
+                            <img src={item.fileData} alt={item.title} className="w-full h-full object-cover" />
+                          ) : (
+                            <FileText className="w-8 h-8 text-rose-500" />
+                          )}
+                        </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <h5 className="font-bold text-xs text-slate-900 truncate">{item.title}</h5>
+                          <p className="text-[10px] text-slate-400 truncate">{item.fileName} • {item.fileSize}</p>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1 border-t border-slate-200 text-xs">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewEvidence(item)}
+                            className="text-blue-600 hover:underline font-semibold text-[11px]"
+                          >
+                            Preview
+                          </button>
+                          <div className="flex items-center space-x-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const a = document.createElement('a');
+                                a.href = item.fileData || item.fileUrl || '';
+                                a.download = item.fileName;
+                                a.click();
+                              }}
+                              className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReplaceTargetEvidence(item);
+                                setEvidenceTitle(item.title);
+                                setEvidenceCategory(item.category);
+                                setSelectedFile(null);
+                                setShowEvidenceModal(true);
+                              }}
+                              className="p-1 text-amber-600 hover:bg-amber-50 rounded"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (currentUser && window.confirm('Hapus file ini?')) {
+                                  await deleteCaseEvidence(selectedCase.id, item.id, currentUser);
+                                  setEvidenceList((prev) => prev.filter((e) => e.id !== item.id));
+                                }
+                              }}
+                              className="p-1 text-rose-500 hover:bg-rose-50 rounded"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 6: COMMUNICATION LOG */}
+          {detailActiveTab === 'communication' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900">Communication Log Terkait #{selectedCase.ticketId}</h4>
+                  <p className="text-[11px] text-slate-500">Rekam percakapan, memo, dan notula rapat.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCommForm(!showCommForm)}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{showCommForm ? 'Tutup Form' : 'Tambah Log'}</span>
+                </button>
+              </div>
+
+              {showCommForm && (
+                <form onSubmit={handleSaveComm} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Judul / Keterangan Bukti *</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Date</label>
                       <input
-                        type="text"
-                        placeholder="Contoh: Foto Kerusakan Mesin / PDF Slip Gaji"
+                        type="date"
+                        value={commForm.date}
+                        onChange={(e) => setCommForm({ ...commForm, date: e.target.value })}
                         required
-                        value={newEvidence.title}
-                        onChange={(e) => setNewEvidence({ ...newEvidence, title: e.target.value })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs"
+                        className="w-full px-3 py-1.5 text-xs rounded border border-slate-300 font-mono"
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Kategori Dokumen *</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Channel</label>
                       <select
-                        value={newEvidence.category}
-                        onChange={(e) => setNewEvidence({ ...newEvidence, category: e.target.value as any })}
-                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white font-medium"
+                        value={commForm.channel}
+                        onChange={(e) => setCommForm({ ...commForm, channel: e.target.value as any })}
+                        className="w-full px-3 py-1.5 text-xs rounded border border-slate-300"
                       >
-                        <option value="Photo">Foto (Dokumentasi Lapangan)</option>
-                        <option value="Document">Dokumen (PDF / Surat)</option>
-                        <option value="Email/Chat Screenshot">Screenshot Chat / Email</option>
-                        <option value="Witness Written Statement">Pernyataan Tertulis Saksi</option>
-                        <option value="CCTV/Video Log">Log Rekaman CCTV</option>
-                        <option value="Audio Recording">Audio Recording</option>
+                        <option value="Email">Email</option>
+                        <option value="Formal HR Memo">Formal HR Memo</option>
+                        <option value="Internal Note">Internal Note</option>
+                        <option value="Verbal Discussion">Verbal Discussion</option>
+                        <option value="Meeting">Meeting</option>
+                        <option value="Hotline / WhatsApp">Hotline / WhatsApp</option>
                       </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Recipient</label>
+                      <input
+                        type="text"
+                        value={commForm.recipient}
+                        onChange={(e) => setCommForm({ ...commForm, recipient: e.target.value })}
+                        required
+                        placeholder="Nama / Departemen Penerima"
+                        className="w-full px-3 py-1.5 text-xs rounded border border-slate-300"
+                      />
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">Chain of Custody / Sumber Bukti</label>
-                    <input
-                      type="text"
-                      placeholder="Contoh: Diserahkan pelapor, disimpan di brankas digital HR SJI"
-                      value={newEvidence.chainOfCustody}
-                      onChange={(e) => setNewEvidence({ ...newEvidence, chainOfCustody: e.target.value })}
-                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs"
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Communication Details</label>
+                    <textarea
+                      rows={2}
+                      value={commForm.details}
+                      onChange={(e) => setCommForm({ ...commForm, details: e.target.value })}
+                      required
+                      placeholder="Isi komunikasi atau pembahasan..."
+                      className="w-full px-3 py-2 text-xs rounded border border-slate-300"
                     />
                   </div>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                    <label className="flex items-center space-x-1.5 text-xs text-slate-600">
-                      <input
-                        type="checkbox"
-                        checked={newEvidence.isConfidential}
-                        onChange={(e) => setNewEvidence({ ...newEvidence, isConfidential: e.target.checked })}
-                        className="rounded text-blue-600"
-                      />
-                      <span>Tandai Sangat Rahasia (Hanya HR &amp; Manajemen)</span>
-                    </label>
-                    <div className="flex space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAddEvidence(false);
-                          setSelectedFile(null);
-                        }}
-                        className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded"
-                      >
-                        Batal
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded shadow-xs"
-                      >
-                        Simpan Bukti
-                      </button>
-                    </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Follow-up Notes</label>
+                    <input
+                      type="text"
+                      value={commForm.followUpNotes}
+                      onChange={(e) => setCommForm({ ...commForm, followUpNotes: e.target.value })}
+                      placeholder="Catatan tindak lanjut..."
+                      className="w-full px-3 py-1.5 text-xs rounded border border-slate-300"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex justify-end space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCommForm(false)}
+                      className="px-3 py-1.5 border border-slate-300 rounded text-xs"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingComm}
+                      className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold"
+                    >
+                      {isSavingComm ? 'Menyimpan...' : 'Simpan Log'}
+                    </button>
                   </div>
                 </form>
               )}
 
-              {/* Evidence Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {evidenceList.length === 0 ? (
-                  <div className="sm:col-span-2 bg-white p-8 rounded-xl border border-slate-200 text-center text-slate-400 text-xs">
-                    Belum ada berkas bukti (Foto / PDF) yang diunggah untuk kasus ini.
-                  </div>
-                ) : (
-                  evidenceList.map((evi) => {
-                    const isPdf =
-                      evi.fileType?.includes('pdf') ||
-                      evi.fileName.toLowerCase().endsWith('.pdf') ||
-                      evi.category === 'Document';
-                    const isImage =
-                      evi.fileType?.startsWith('image') ||
-                      evi.fileData?.startsWith('data:image') ||
-                      evi.category === 'Photo' ||
-                      evi.fileName.match(/\.(jpeg|jpg|png|webp|gif)$/i);
-
-                    return (
-                      <div key={evi.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-3 flex flex-col justify-between">
-                        <div className="space-y-2">
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <span className="font-bold text-slate-900 text-xs block">{evi.title}</span>
-                              <span className="text-[11px] text-slate-500 font-mono">{evi.fileName} ({evi.fileSize})</span>
-                            </div>
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
-                              {evi.category}
-                            </span>
-                          </div>
-
-                          {/* Image or PDF Preview area */}
-                          {isImage && evi.fileData ? (
-                            <div
-                              onClick={() => setPreviewEvidence(evi)}
-                              className="relative cursor-pointer group rounded-lg overflow-hidden border border-slate-200 h-32 bg-slate-100 flex items-center justify-center"
-                            >
-                              <img
-                                src={evi.fileData}
-                                alt={evi.title}
-                                className="w-full h-full object-cover group-hover:scale-105 transition duration-200"
-                              />
-                              <div className="absolute inset-0 bg-slate-900/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white text-xs font-semibold space-x-1">
-                                <Eye className="w-4 h-4" />
-                                <span>Lihat Foto Penuh</span>
-                              </div>
-                            </div>
-                          ) : isPdf ? (
-                            <div className="p-3 bg-rose-50/70 border border-rose-200 rounded-lg flex items-center space-x-3">
-                              <div className="p-2 bg-rose-100 rounded text-rose-700 font-bold text-xs uppercase">
-                                PDF
-                              </div>
-                              <div className="flex-1 truncate">
-                                <span className="font-semibold text-xs text-rose-950 block truncate">
-                                  Dokumen PDF Terverifikasi
-                                </span>
-                                <span className="text-[10px] text-rose-700">Tersimpan dalam vault bukti</span>
-                              </div>
-                              {evi.fileData && (
-                                <a
-                                  href={evi.fileData}
-                                  download={evi.fileName}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-2 py-1 rounded bg-white hover:bg-rose-100 border border-rose-300 text-rose-800 text-[10px] font-bold transition flex items-center space-x-1"
-                                >
-                                  <Download className="w-3 h-3" />
-                                  <span>Unduh</span>
-                                </a>
-                              )}
-                            </div>
-                          ) : null}
-
-                          {evi.isConfidential && (
-                            <div className="inline-flex items-center text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                              <Lock className="w-2.5 h-2.5 mr-1" />
-                              <span>Sangat Rahasia • Masked dari PIC</span>
-                            </div>
-                          )}
-
-                          <p className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 leading-normal">
-                            <strong>Chain of Custody:</strong> {evi.chainOfCustody}
-                          </p>
-                        </div>
-
-                        <div className="text-[10px] text-slate-400 flex items-center justify-between pt-2 border-t border-slate-100">
-                          <span>Diunggah: {evi.uploadedBy}</span>
-                          <span>{evi.uploadedAt}</span>
-                        </div>
+              {communications.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs border border-dashed rounded-xl">
+                  Belum ada log komunikasi tercatat.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
+                  {communications.map((cm) => (
+                    <div key={cm.id} className="p-3 bg-white space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-slate-900">{cm.communicator} → {cm.recipient}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">{cm.date} • {cm.channel}</span>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                      <p className="text-xs text-slate-700">{cm.details}</p>
+                      {cm.followUpNotes && (
+                        <p className="text-[11px] text-slate-400 italic">Follow-up: {cm.followUpNotes}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Modal Footer */}
-        <div className="bg-white border-t border-slate-200 px-6 py-3 flex items-center justify-between">
-          <div className="text-xs text-slate-500">
-            Case Ticket ID: <span className="font-mono font-bold text-slate-800">{selectedCase.ticketId}</span> • Last Updated: {selectedCase.lastUpdate}
+        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
+          <div>
+            Status Kasus: <strong className="text-blue-700 font-bold uppercase">{selectedCase.status}</strong>
           </div>
           <button
             onClick={() => setIsDetailModalOpen(false)}
-            className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg transition"
+            className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg font-semibold transition"
           >
-            Close Workspace
+            Tutup
           </button>
         </div>
       </div>
 
-      {/* Modal Konfirmasi Hapus Kasus Salah Input (Detail Workspace) */}
+      {/* Edit Case Modal (Full Edit Existing Complaint) */}
+      <EditCaseModal
+        isOpen={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        caseData={selectedCase}
+      />
+
+      {/* Delete Case Confirmation Modal */}
       {showDeleteModal && (
-        <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-gradient-to-r from-rose-600 to-rose-700 p-4 text-white flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">
-                  <Trash2 className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-base leading-tight">Hapus Keluhan (Koreksi Salah Input)</h3>
-                  <p className="text-xs text-rose-100 mt-0.5">Penghapusan data &amp; pencatatan Audit Trail HR</p>
-                </div>
-              </div>
+        <div className="fixed inset-0 z-60 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-rose-200 shadow-2xl p-6 space-y-4">
+            <div className="flex items-center space-x-3 text-rose-600">
+              <AlertTriangle className="w-6 h-6" />
+              <h3 className="font-bold text-base text-slate-900">Hapus Data Kasus?</h3>
+            </div>
+            <p className="text-xs text-slate-600">
+              Tindakan ini untuk menghapus data keluhan yang salah dimasukkan. Seluruh data subkoleksi (RCA, investigasi, bukti) akan dihapus secara permanen dari Firestore.
+            </p>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Alasan Penghapusan <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Contoh: Salah input nomor tiket / duplikasi data"
+                className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+              />
+            </div>
+
+            {deleteError && (
+              <div className="text-xs text-rose-600 font-semibold">{deleteError}</div>
+            )}
+
+            <div className="flex justify-end space-x-2 pt-2">
               <button
                 type="button"
                 onClick={() => setShowDeleteModal(false)}
-                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10"
+                className="px-3 py-2 border rounded-lg text-xs font-semibold text-slate-600"
               >
-                <X className="w-5 h-5" />
+                Batal
               </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start space-x-2.5 text-xs text-amber-800">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold">Perhatian:</span> Kasus {selectedCase.ticketId} akan dihapus secara permanen dari database. Tindakan ini akan dicatat ke dalam <strong>Audit Trail</strong> dengan nama Anda.
-                </div>
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1.5">
-                <div className="flex justify-between items-center pb-1.5 border-b border-slate-200">
-                  <span className="text-slate-500 font-medium">Nomor Tiket:</span>
-                  <span className="font-mono font-bold text-blue-700">{selectedCase.ticketId}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">Pelapor:</span>
-                  <span className="font-semibold text-slate-800">
-                    {selectedCase.isAnonymous ? (selectedCase.anonymousAlias || 'Anonim') : selectedCase.employeeName}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">Departemen:</span>
-                  <span className="text-slate-700">{selectedCase.department}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">Kategori:</span>
-                  <span className="text-slate-700 font-medium">{selectedCase.complaintCategory}</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-xs font-bold text-slate-700">
-                  Alasan Penghapusan / Koreksi <span className="text-rose-500">*</span>
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    'Salah input kategori / departemen',
-                    'Data keluhan duplikat',
-                    'Testing / uji coba sistem',
-                    'Salah identitas pelapor / nomor tiket',
-                  ].map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setDeleteReason(preset)}
-                      className={`text-[11px] px-2.5 py-1 rounded-lg border transition ${
-                        deleteReason === preset
-                          ? 'bg-blue-50 border-blue-400 text-blue-700 font-bold'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-                <textarea
-                  value={deleteReason}
-                  onChange={(e) => setDeleteReason(e.target.value)}
-                  rows={2}
-                  placeholder="Tuliskan alasan spesifik penghapusan..."
-                  className="w-full text-xs p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-rose-500 focus:border-rose-500 outline-none"
-                />
-              </div>
-
-              {deleteError && (
-                <div className="p-2.5 text-xs bg-rose-50 border border-rose-200 text-rose-700 rounded-lg">
-                  {deleteError}
-                </div>
-              )}
-
-              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowDeleteModal(false)}
-                  disabled={isDeleting}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition"
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmDeleteCase}
-                  disabled={isDeleting || !deleteReason.trim()}
-                  className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-lg transition flex items-center space-x-1.5 shadow-xs"
-                >
-                  {isDeleting ? (
-                    <span>Menghapus...</span>
-                  ) : (
-                    <>
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Ya, Hapus Kasus Ini</span>
-                    </>
-                  )}
-                </button>
-              </div>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={confirmDeleteCase}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold shadow-xs"
+              >
+                {isDeleting ? 'Menghapus...' : 'Ya, Hapus Kasus'}
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Preview Modal for Photo / PDF Evidence */}
-      {previewEvidence && (
-        <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center space-x-2">
-                <FileText className="w-4 h-4 text-blue-400" />
-                <div>
-                  <h4 className="font-bold text-xs">{previewEvidence.title}</h4>
-                  <span className="text-[10px] text-slate-400 font-mono">{previewEvidence.fileName} ({previewEvidence.fileSize})</span>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2">
-                {previewEvidence.fileData && (
-                  <a
-                    href={previewEvidence.fileData}
-                    download={previewEvidence.fileName}
-                    className="inline-flex items-center space-x-1 px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Unduh Berkas</span>
-                  </a>
-                )}
-                <button
-                  onClick={() => setPreviewEvidence(null)}
-                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+      {/* CAPA Add/Edit Submodal */}
+      {showCapaModal && (
+        <div className="fixed inset-0 z-60 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+              <h3 className="font-bold text-sm">
+                {editingCapa ? 'Revisi / Update Data CAPA' : 'Tambah Rencana Aksi (CAPA)'}
+              </h3>
+              <button onClick={() => setShowCapaModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
-            <div className="p-4 flex-1 overflow-auto bg-slate-100 flex items-center justify-center">
-              {previewEvidence.fileData?.startsWith('data:image') || previewEvidence.category === 'Photo' ? (
+            <form onSubmit={handleSaveCapaSubmit} className="p-5 space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Action Plan Description <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={capaForm.description}
+                  onChange={(e) => setCapaForm({ ...capaForm, description: e.target.value })}
+                  required
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Responsible PIC <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={capaForm.responsiblePic}
+                    onChange={(e) => setCapaForm({ ...capaForm, responsiblePic: e.target.value })}
+                    required
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Target Date <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={capaForm.targetDate}
+                    onChange={(e) => setCapaForm({ ...capaForm, targetDate: e.target.value })}
+                    required
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Action Taken (Tindakan Terlaksana)
+                </label>
+                <textarea
+                  rows={2}
+                  value={capaForm.actionTaken}
+                  onChange={(e) => setCapaForm({ ...capaForm, actionTaken: e.target.value })}
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Progress Status (2 Status) <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={capaForm.progressStatus}
+                    onChange={(e) => setCapaForm({ ...capaForm, progressStatus: e.target.value as any })}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 font-bold"
+                  >
+                    <option value="Progress">Progress</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Completion Date
+                  </label>
+                  <input
+                    type="date"
+                    value={capaForm.completionDate}
+                    onChange={(e) => setCapaForm({ ...capaForm, completionDate: e.target.value })}
+                    disabled={capaForm.progressStatus !== 'Completed'}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 font-mono disabled:bg-slate-100"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Notes (Catatan / Revisi Perbaikan)
+                </label>
+                <input
+                  type="text"
+                  value={capaForm.notes}
+                  onChange={(e) => setCapaForm({ ...capaForm, notes: e.target.value })}
+                  placeholder="Keterangan jika ada revisi"
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCapaModal(false)}
+                  className="px-3 py-2 border rounded-lg text-xs font-semibold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingCapa}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold"
+                >
+                  {isSavingCapa ? 'Menyimpan...' : 'Simpan CAPA'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Evidence Upload Modal */}
+      {showEvidenceModal && (
+        <div className="fixed inset-0 z-60 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-2xl p-5 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="font-bold text-sm text-slate-900">
+                {replaceTargetEvidence ? 'Ganti File Bukti' : 'Unggah File Bukti'}
+              </h3>
+              <button onClick={() => setShowEvidenceModal(false)} className="text-slate-400 hover:text-slate-800">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {evidenceError && (
+              <div className="text-xs text-rose-600 font-medium">{evidenceError}</div>
+            )}
+
+            <form onSubmit={handleSaveEvidenceUpload} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Judul / Keterangan Bukti</label>
+                <input
+                  type="text"
+                  value={evidenceTitle}
+                  onChange={(e) => setEvidenceTitle(e.target.value)}
+                  placeholder="Contoh: Lampiran Kronologis Lapangan"
+                  className="w-full px-3 py-1.5 text-xs rounded border border-slate-300"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Pilih File (JPG, PNG, PDF)</label>
+                <input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.pdf"
+                  onChange={handleEvidenceFileChange}
+                  className="w-full text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEvidenceModal(false)}
+                  className="px-3 py-2 border rounded-lg text-xs font-semibold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUploadingEvidence}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold"
+                >
+                  {isUploadingEvidence ? 'Mengunggah...' : 'Upload'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Preview Evidence Modal */}
+      {previewEvidence && (
+        <div className="fixed inset-0 z-70 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-sm">{previewEvidence.title}</h4>
+                <p className="text-xs text-slate-400">{previewEvidence.fileName} • {previewEvidence.fileSize}</p>
+              </div>
+              <button onClick={() => setPreviewEvidence(null)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 bg-slate-950 flex-1 overflow-auto flex items-center justify-center min-h-[380px]">
+              {previewEvidence.fileType?.includes('pdf') || previewEvidence.fileName.toLowerCase().endsWith('.pdf') ? (
+                <iframe
+                  src={previewEvidence.fileData || previewEvidence.fileUrl}
+                  title={previewEvidence.fileName}
+                  className="w-full h-[500px] rounded bg-white"
+                />
+              ) : previewEvidence.fileData || previewEvidence.fileUrl ? (
                 <img
-                  src={previewEvidence.fileData}
+                  src={previewEvidence.fileData || previewEvidence.fileUrl}
                   alt={previewEvidence.title}
-                  className="max-h-[70vh] w-auto max-w-full object-contain rounded-lg shadow-sm"
+                  className="max-h-[500px] max-w-full object-contain rounded"
                 />
               ) : (
-                <div className="text-center p-8 bg-white rounded-xl border border-slate-200 shadow-xs max-w-md">
-                  <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-3 font-bold text-sm">
-                    PDF
-                  </div>
-                  <h4 className="font-bold text-sm text-slate-900">{previewEvidence.fileName}</h4>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Dokumen telah tersimpan aman dengan integritas rantai bukti (chain of custody).
-                  </p>
-                  {previewEvidence.fileData && (
-                    <a
-                      href={previewEvidence.fileData}
-                      download={previewEvidence.fileName}
-                      className="mt-4 inline-flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>Buka / Unduh Dokumen PDF</span>
-                    </a>
-                  )}
-                </div>
+                <div className="text-white text-xs">Preview tidak tersedia.</div>
               )}
             </div>
           </div>

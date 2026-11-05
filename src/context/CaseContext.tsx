@@ -7,7 +7,12 @@ import {
   deleteCaseRecord,
   exportCasesToExcel,
   filterCasesByRole,
-  logAuditAction
+  logAuditAction,
+  calculateDueDateFromGrievanceDate,
+  getSyncStatus,
+  subscribeToSyncStatus,
+  syncOfflineCasesToFirestore,
+  SyncStatus,
 } from '../services/db';
 import { useAuth } from './AuthContext';
 
@@ -44,17 +49,26 @@ interface CaseContextType {
   handleDeleteCase: (caseId: string, reason?: string) => Promise<void>;
   handleImportCases: (newCases: Partial<GrievanceCase>[]) => Promise<number>;
   handleExport: (format?: 'xlsx' | 'csv') => void;
-  openCaseDetail: (c: GrievanceCase, tab?: 'overview' | 'investigation' | 'root_cause' | 'action_plan' | 'communication' | 'evidence' | 'audit') => void;
+  syncStatus: {
+    hasError: boolean;
+    errorMessage: string | null;
+    lastAttemptAt: string | null;
+    pendingSyncCount: number;
+  };
+  handleSyncOffline: () => Promise<{ synced: number; errors: string[] }>;
   stats: {
     total: number;
+    activeCount: number;
     open: number;
     investigation: number;
     actionTaken: number;
     closed: number;
     criticalCount: number;
     slaBreachedCount: number;
+    activeBreached: number;
     slaApproachingCount: number;
     complianceRate: number;
+    hasCases: boolean;
   };
 }
 
@@ -75,6 +89,18 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [departmentFilter, setDepartmentFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+
+  // Sync Status state from db
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(getSyncStatus());
+
+  useEffect(() => {
+    const unsubSync = subscribeToSyncStatus((st) => setSyncStatus(st));
+    return () => unsubSync();
+  }, []);
+
+  const handleSyncOffline = async () => {
+    return await syncOfflineCasesToFirestore();
+  };
 
   useEffect(() => {
     const unsubscribe = subscribeToCases((allFetchedCases) => {
@@ -138,21 +164,35 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const investigation = cases.filter((c) => c.status === 'Investigation').length;
     const actionTaken = cases.filter((c) => c.status === 'Action Taken').length;
     const closed = cases.filter((c) => c.status === 'Closed').length;
+    
+    // Total Active Cases = all cases not Closed!
+    const activeCount = open + investigation + actionTaken;
+    
+    // Critical cases requiring active emergency escalation
     const criticalCount = cases.filter((c) => c.priority === 'Critical' && c.status !== 'Closed').length;
+    
+    // SLA tracking: Active breached cases vs overall breached records
     const slaBreachedCount = cases.filter((c) => c.slaStatus === 'Breached').length;
-    const slaApproachingCount = cases.filter((c) => c.slaStatus === 'Approaching Due').length;
-    const complianceRate = total > 0 ? Math.round(((total - slaBreachedCount) / total) * 100) : 100;
+    const activeBreached = cases.filter((c) => c.status !== 'Closed' && c.slaStatus === 'Breached').length;
+    const slaApproachingCount = cases.filter((c) => c.status !== 'Closed' && c.slaStatus === 'Approaching Due').length;
+    
+    // Rule D: Denominator must be strictly valid. Do NOT show fake 100% when there is no data!
+    const hasCases = total > 0;
+    const complianceRate = hasCases ? Math.max(0, Math.round(((total - slaBreachedCount) / total) * 100)) : 0;
 
     return {
       total,
+      activeCount,
       open,
       investigation,
       actionTaken,
       closed,
       criticalCount,
       slaBreachedCount,
+      activeBreached,
       slaApproachingCount,
       complianceRate,
+      hasCases,
     };
   }, [cases]);
 
@@ -187,28 +227,35 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let count = 0;
     for (const item of newCases) {
       if (item.ticketId && item.complaintCategory) {
+        const dateReceived = item.dateReceived || new Date().toISOString().substring(0, 10);
+        const priority = item.priority || 'Major';
+        const status = item.status || 'Open';
+        const isClosed = status === 'Closed';
+        const dueDate = item.dueDate || calculateDueDateFromGrievanceDate(dateReceived, priority);
+        const closingDate = isClosed ? (item.closingDate || dateReceived) : null;
+
         await createCase({
           ticketId: item.ticketId,
-          dateReceived: item.dateReceived || new Date().toISOString().substring(0, 10),
+          dateReceived,
           employeeName: item.employeeName || 'Imported Grievance',
           isAnonymous: item.isAnonymous ?? false,
-          anonymousAlias: item.anonymousAlias,
+          anonymousAlias: item.anonymousAlias || (item.isAnonymous ? 'Whistleblower' : undefined),
           department: item.department || 'Operations',
           complaintCategory: item.complaintCategory,
-          priority: item.priority || 'Major',
-          status: item.status || 'Open',
+          priority,
+          status,
           assignedPic: item.assignedPic || 'Unassigned',
           assignedPicId: item.assignedPicId || 'usr-pic-ops',
           assignedInvestigator: item.assignedInvestigator || '',
           assignedInvestigatorId: item.assignedInvestigatorId || '',
-          progress: item.progress ?? 10,
-          dueDate: item.dueDate || new Date(Date.now() + (item.priority === 'Critical' ? 14 : item.priority === 'Major' ? 7 : 3) * 86400000).toISOString().substring(0, 10),
-          closingDate: item.closingDate,
-          slaStatus: item.slaStatus || 'On Track',
-          slaHoursLeft: item.slaHoursLeft ?? ((item.priority === 'Critical' ? 14 : item.priority === 'Major' ? 7 : 3) * 24),
+          progress: item.progress ?? (isClosed ? 100 : status === 'Action Taken' ? 75 : status === 'Investigation' ? 45 : 15),
+          dueDate,
+          closingDate,
+          slaStatus: item.slaStatus || (isClosed ? 'Met' : 'On Track'),
+          slaHoursLeft: isClosed ? 0 : (item.slaHoursLeft ?? 72),
           lastUpdate: new Date().toISOString().replace('T', ' ').substring(0, 16),
           description: item.description || 'Imported case data from company spreadsheet.',
-          channelReceived: item.channelReceived || 'Internal Grievance Web Portal (Batch Sync)',
+          channelReceived: item.channelReceived || 'Online',
           createdBy: currentUser.email,
         }, currentUser);
         count++;
@@ -291,6 +338,8 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
         handleImportCases,
         handleExport,
         openCaseDetail,
+        syncStatus,
+        handleSyncOffline,
         stats,
       }}
     >

@@ -167,14 +167,14 @@ export const MasterDataView: React.FC = () => {
                   value={newCat.defaultPriority}
                   onChange={(e) => {
                     const prio = e.target.value as MasterCategory['defaultPriority'];
-                    const sla = prio === 'Critical' ? 14 : prio === 'Major' ? 7 : 3;
+                    const sla = prio === 'Critical' ? 3 : prio === 'Major' ? 7 : 14;
                     setNewCat({ ...newCat, defaultPriority: prio, slaDays: sla });
                   }}
                   className="px-2.5 py-1.5 border border-slate-200 rounded"
                 >
-                  <option value="Minor">Minor (3 Hari)</option>
+                  <option value="Minor">Minor (14 Hari)</option>
                   <option value="Major">Major (7 Hari)</option>
-                  <option value="Critical">Critical (14 Hari)</option>
+                  <option value="Critical">Critical (3 Hari / 72 Jam)</option>
                 </select>
                 <input
                   type="number"
@@ -419,9 +419,9 @@ export const MasterDataView: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="p-4 rounded-xl border border-slate-200 bg-slate-50">
               <span className="font-bold text-slate-700 text-xs uppercase tracking-wider block">Minor Priority</span>
-              <div className="text-2xl font-black text-slate-800 mt-1">3 Hari</div>
+              <div className="text-2xl font-black text-slate-800 mt-1">14 Hari</div>
               <p className="text-[11px] text-slate-600 mt-1">
-                Penyelesaian cepat untuk keluhan administratif, fasilitas kerja, absensi, cuti, atau hubungan kerja harian.
+                Penyelesaian untuk keluhan administratif, fasilitas kerja, absensi, cuti, atau hubungan kerja harian.
               </p>
             </div>
 
@@ -435,9 +435,9 @@ export const MasterDataView: React.FC = () => {
 
             <div className="p-4 rounded-xl border border-rose-200 bg-rose-50/60">
               <span className="font-bold text-rose-900 text-xs uppercase tracking-wider block">Critical Priority</span>
-              <div className="text-2xl font-black text-rose-700 mt-1">14 Hari</div>
+              <div className="text-2xl font-black text-rose-700 mt-1">72 Jam (3 Hari)</div>
               <p className="text-[11px] text-rose-800 mt-1">
-                Investigasi komprehensif untuk kasus pelecehan, pelanggaran etika berat, atau bahaya keselamatan kerja (K3/Keamanan).
+                Wajib eskalasi eksekutif 72 jam untuk kasus pelecehan, pelanggaran etika berat, atau bahaya keselamatan kerja (K3/Keamanan).
               </p>
             </div>
           </div>

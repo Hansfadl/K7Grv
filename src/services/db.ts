@@ -7,40 +7,32 @@ import {
   updateDoc,
   deleteDoc,
   onSnapshot,
-  query,
-  orderBy,
-  limit
 } from 'firebase/firestore';
 import { db } from './firebase';
 import {
   GrievanceCase,
-  InvestigationFinding,
+  InvestigationRecord,
   RootCauseAnalysis,
   ActionPlan,
   CommunicationLog,
   EvidenceItem,
-  AuditLog,
   MasterCategory,
   MasterDepartment,
   UserProfile,
-  UserRole
+  PriorityLevel,
+  CaseStatus,
+  GrievanceInstrument
 } from '../types';
 import {
   INITIAL_CASES,
   INITIAL_USERS,
   INITIAL_CATEGORIES,
   INITIAL_DEPARTMENTS,
-  INITIAL_FINDINGS,
-  INITIAL_ROOT_CAUSES,
-  INITIAL_ACTION_PLANS,
-  INITIAL_COMMUNICATIONS,
-  INITIAL_EVIDENCE,
-  INITIAL_AUDIT_LOGS
 } from './mockData';
 import * as XLSX from 'xlsx';
 
 // Local storage cache keys for instant initial paint & offline tolerance
-const STORAGE_PREFIX = 'sji_hr_v4_cloud_';
+const STORAGE_PREFIX = 'sji_hr_v5_firestore_';
 
 function getLocalData<T>(key: string, fallback: T): T {
   try {
@@ -55,7 +47,7 @@ function setLocalData<T>(key: string, data: T) {
   try {
     localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(data));
   } catch (err) {
-    console.warn('LocalStorage caching:', err);
+    console.warn('LocalStorage caching warning:', err);
   }
 }
 
@@ -78,12 +70,9 @@ export function getDeviceSummary(): string {
   else if (ua.includes('iPad')) os = 'Apple iPad';
   else if (ua.includes('Linux')) os = 'Linux OS';
 
-  const isMobile = /Mobi|Android|iPhone|iPad/i.test(ua);
-  const screenRes = typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : '';
-  return `${browser} on ${os} (${isMobile ? 'Mobile' : 'Desktop'}${screenRes ? `, ${screenRes}` : ''})`;
+  return `${browser} on ${os}`;
 }
 
-// Format Role Name for audits
 export function formatRoleName(role?: string): string {
   switch (role) {
     case 'hr_admin':
@@ -99,11 +88,228 @@ export function formatRoleName(role?: string): string {
   }
 }
 
+// Helper: Get SLA days based on Priority.
+// Critical urgency follows 72 hours (3 calendar days) mandatory escalation rule.
+// Major = 7 calendar days. Minor = 14 calendar days.
+export function getSlaDays(priority: PriorityLevel): number {
+  switch (priority) {
+    case 'Critical':
+      return 3; // 72 hours (3 calendar days) - mandatory executive escalation
+    case 'Major':
+      return 7; // 7 calendar days - standard investigation & mediation
+    case 'Minor':
+    default:
+      return 14; // 14 calendar days - administrative resolution
+  }
+}
+
+// Helper: Calculate Target Due Date based strictly on Grievance Date (dateReceived) and Priority SLA
+export function calculateDueDateFromGrievanceDate(dateReceivedStr: string, priority: PriorityLevel): string {
+  const slaDays = getSlaDays(priority);
+  try {
+    const baseDate = new Date(dateReceivedStr);
+    if (isNaN(baseDate.getTime())) {
+      const now = new Date();
+      now.setDate(now.getDate() + slaDays);
+      return now.toISOString().substring(0, 10);
+    }
+    const target = new Date(baseDate.getTime() + slaDays * 86400000);
+    return target.toISOString().substring(0, 10);
+  } catch {
+    const now = new Date();
+    now.setDate(now.getDate() + slaDays);
+    return now.toISOString().substring(0, 10);
+  }
+}
+
+// Helper: Calculate SLA remaining hours & Met/Breached status.
+// For Closed cases, the SLA clock is STOPPED (slaHoursLeft = 0) and never active overdue.
+export function calculateSlaStatus(
+  dateReceived: string,
+  dueDate: string,
+  status: CaseStatus,
+  closingDate?: string | null
+): { slaStatus: 'On Track' | 'Approaching Due' | 'Breached' | 'Met' | 'Overdue'; slaHoursLeft: number } {
+  if (status === 'Closed') {
+    // When closed, evaluate whether it was closed before or after dueDate
+    if (closingDate && dueDate) {
+      const closedTime = new Date(closingDate).getTime();
+      const dueTime = new Date(dueDate).getTime();
+      const isBreached = closedTime > dueTime;
+      return {
+        slaStatus: isBreached ? 'Breached' : 'Met',
+        slaHoursLeft: 0,
+      };
+    }
+    return { slaStatus: 'Met', slaHoursLeft: 0 };
+  }
+
+  const now = new Date().getTime();
+  const due = new Date(dueDate).getTime();
+  if (isNaN(due)) {
+    return { slaStatus: 'On Track', slaHoursLeft: 72 };
+  }
+
+  const hoursLeft = Math.round((due - now) / (1000 * 60 * 60));
+
+  if (hoursLeft < 0) {
+    return { slaStatus: 'Breached', slaHoursLeft: hoursLeft };
+  }
+  if (hoursLeft <= 48) {
+    return { slaStatus: 'Approaching Due', slaHoursLeft: hoursLeft };
+  }
+  return { slaStatus: 'On Track', slaHoursLeft: hoursLeft };
+}
+
+/**
+ * Universal Firestore Sanitizer:
+ * Recursively strips `undefined` from objects and arrays so Firestore never throws:
+ * "Unsupported field value: undefined"
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === undefined) {
+    return null as any;
+  }
+  if (data === null || typeof data !== 'object') {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item)) as any;
+  }
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data as Record<string, any>)) {
+    if (value !== undefined) {
+      result[key] = sanitizeForFirestore(value);
+    }
+  }
+  return result as T;
+}
+
+/**
+ * Ensures case payload strictly complies with Firestore data rules:
+ * - If status === 'Closed', closingDate must be a valid ISO date string.
+ * - If status !== 'Closed', closingDate must be null (never undefined!).
+ * - Empty string optional fields are cleanly normalized to null.
+ * - No undefined properties are ever sent.
+ */
+export function prepareCasePayload(
+  caseData: Partial<GrievanceCase>,
+  fallbackTicketId?: string
+): Partial<GrievanceCase> {
+  const isClosed = caseData.status === 'Closed';
+  const cleanClosingDate: string | null = isClosed
+    ? (caseData.closingDate || new Date().toISOString().substring(0, 10))
+    : null;
+
+  const dateReceived = caseData.dateReceived || new Date().toISOString().substring(0, 10);
+  const priority = caseData.priority || 'Major';
+  const dueDate = caseData.dueDate || calculateDueDateFromGrievanceDate(dateReceived, priority);
+  const status = caseData.status || 'Open';
+  const { slaStatus: computedSlaStatus, slaHoursLeft: computedSlaHours } = calculateSlaStatus(
+    dateReceived,
+    dueDate,
+    status,
+    cleanClosingDate
+  );
+
+  const cleanPayload: Partial<GrievanceCase> = {
+    ...caseData,
+    dateReceived,
+    priority,
+    status,
+    dueDate,
+    closingDate: cleanClosingDate,
+    slaStatus: isClosed ? computedSlaStatus : (caseData.slaStatus && caseData.slaStatus !== 'Met' ? caseData.slaStatus : computedSlaStatus),
+    slaHoursLeft: isClosed ? 0 : computedSlaHours,
+    lastUpdate: new Date().toISOString().replace('T', ' ').substring(0, 16),
+  };
+
+  if (!cleanPayload.ticketId && fallbackTicketId) {
+    cleanPayload.ticketId = fallbackTicketId;
+  }
+
+  // Normalize optional string fields to null if empty or undefined
+  if (cleanPayload.incidentDate === undefined || cleanPayload.incidentDate === '') {
+    cleanPayload.incidentDate = null as any;
+  }
+  if (cleanPayload.location === undefined || cleanPayload.location === '') {
+    cleanPayload.location = null as any;
+  }
+  if (cleanPayload.involvedParties === undefined || cleanPayload.involvedParties === '') {
+    cleanPayload.involvedParties = null as any;
+  }
+  if (cleanPayload.anonymousAlias === undefined || cleanPayload.anonymousAlias === '') {
+    cleanPayload.anonymousAlias = cleanPayload.isAnonymous ? 'Whistleblower' : (null as any);
+  }
+  if (cleanPayload.employeeNik === undefined || cleanPayload.employeeNik === '') {
+    cleanPayload.employeeNik = null as any;
+  }
+  if (cleanPayload.resolutionSummary === undefined || cleanPayload.resolutionSummary === '') {
+    cleanPayload.resolutionSummary = null as any;
+  }
+  if (cleanPayload.approvedBy === undefined || cleanPayload.approvedBy === '') {
+    cleanPayload.approvedBy = null as any;
+  }
+
+  return sanitizeForFirestore(cleanPayload);
+}
+
 // ==========================================
-// 1. REAL-TIME MULTI-USER CLOUD PERSISTENCE
+// SYNC NOTIFICATION & OFFLINE PERSISTENCE
+// ==========================================
+export interface SyncStatus {
+  hasError: boolean;
+  errorMessage: string | null;
+  lastAttemptAt: string | null;
+  pendingSyncCount: number;
+}
+
+let syncStatusListeners: Array<(status: SyncStatus) => void> = [];
+let currentSyncStatus: SyncStatus = {
+  hasError: false,
+  errorMessage: null,
+  lastAttemptAt: null,
+  pendingSyncCount: 0,
+};
+
+export function getSyncStatus(): SyncStatus {
+  return currentSyncStatus;
+}
+
+export function subscribeToSyncStatus(listener: (status: SyncStatus) => void) {
+  syncStatusListeners.push(listener);
+  listener(currentSyncStatus);
+  return () => {
+    syncStatusListeners = syncStatusListeners.filter((l) => l !== listener);
+  };
+}
+
+export function notifySyncError(errorMsg: string) {
+  currentSyncStatus = {
+    hasError: true,
+    errorMessage: errorMsg,
+    lastAttemptAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
+    pendingSyncCount: currentSyncStatus.pendingSyncCount + 1,
+  };
+  syncStatusListeners.forEach((l) => l(currentSyncStatus));
+}
+
+export function clearSyncError() {
+  currentSyncStatus = {
+    hasError: false,
+    errorMessage: null,
+    lastAttemptAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
+    pendingSyncCount: 0,
+  };
+  syncStatusListeners.forEach((l) => l(currentSyncStatus));
+}
+
+// ==========================================
+// 1. MULTI-USER CLOUD PERSISTENCE
 // ==========================================
 
-// Subscribe to real-time Users list from Firestore
 export function subscribeToUsers(callback: (users: UserProfile[]) => void) {
   const usersCol = collection(db, 'users');
 
@@ -115,7 +321,6 @@ export function subscribeToUsers(callback: (users: UserProfile[]) => void) {
         usersList.push({ id: d.id, ...(d.data() as Omit<UserProfile, 'id'>) });
       });
 
-      // Sort by display name or creation date
       usersList.sort((a, b) => a.displayName.localeCompare(b.displayName));
       setLocalData('users_list', usersList);
       callback(usersList);
@@ -130,7 +335,6 @@ export function subscribeToUsers(callback: (users: UserProfile[]) => void) {
   return unsubscribe;
 }
 
-// Fetch all registered users from Firestore
 export async function getUsers(): Promise<UserProfile[]> {
   try {
     const usersCol = collection(db, 'users');
@@ -150,35 +354,21 @@ export async function getUsers(): Promise<UserProfile[]> {
   return getLocalData<UserProfile[]>('users_list', INITIAL_USERS);
 }
 
-// Save or update a single user in Firestore
 export async function saveUser(user: UserProfile): Promise<void> {
+  const cleanUser = sanitizeForFirestore(user);
   try {
-    await setDoc(doc(db, 'users', user.id), user, { merge: true });
+    await setDoc(doc(db, 'users', user.id), cleanUser, { merge: true });
   } catch (err: any) {
     console.warn('Firestore saveUser error:', err.message);
   }
-  // Sync local cache
   const cached = getLocalData<UserProfile[]>('users_list', []);
   const existingIdx = cached.findIndex((u) => u.id === user.id);
   const updated = existingIdx >= 0
-    ? cached.map((u) => (u.id === user.id ? { ...u, ...user } : u))
-    : [...cached, user];
+    ? cached.map((u) => (u.id === user.id ? { ...u, ...cleanUser } : u))
+    : [...cached, cleanUser];
   setLocalData('users_list', updated);
 }
 
-// Save bulk users (e.g. array update)
-export async function saveUsers(users: UserProfile[]): Promise<void> {
-  setLocalData('users_list', users);
-  for (const u of users) {
-    try {
-      await setDoc(doc(db, 'users', u.id), u, { merge: true });
-    } catch (err: any) {
-      console.warn('Firestore saveUsers error for user', u.id, err.message);
-    }
-  }
-}
-
-// Delete user from Firestore
 export async function deleteUserFromDb(userId: string): Promise<void> {
   try {
     await deleteDoc(doc(db, 'users', userId));
@@ -190,145 +380,55 @@ export async function deleteUserFromDb(userId: string): Promise<void> {
   setLocalData('users_list', updated);
 }
 
-// Record User Access / Login into Firestore
 export async function recordUserLogin(user: UserProfile, deviceStr?: string): Promise<void> {
   const device = deviceStr || getDeviceSummary();
   const now = new Date().toISOString();
   const loginCount = (user.loginCount || 0) + 1;
 
   try {
-    await updateDoc(doc(db, 'users', user.id), {
-      lastLoginAt: now,
-      lastLoginDevice: device,
-      loginCount,
+    await setDoc(
+      doc(db, 'users', user.id),
+      sanitizeForFirestore({
+        ...user,
+        lastLoginAt: now,
+        lastLoginDevice: device,
+        loginCount,
+      }),
+      { merge: true }
+    );
+  } catch (err: any) {
+    console.warn('Firestore recordUserLogin fallback:', err.message);
+  }
+}
+
+// Lightweight internal audit action recorder for case changes
+export async function logAuditAction(log: {
+  userId: string;
+  userName: string;
+  userRole: string;
+  action: string;
+  caseId?: string;
+  ticketId?: string;
+  details: string;
+  device?: string;
+}): Promise<void> {
+  const logId = `aud-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+  try {
+    await setDoc(doc(db, 'audit_logs', logId), {
+      ...log,
+      id: logId,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      device: log.device || getDeviceSummary(),
     });
   } catch {
-    // If updateDoc fails (e.g., doc just created), try setDoc with merge
-    try {
-      await setDoc(
-        doc(db, 'users', user.id),
-        {
-          ...user,
-          lastLoginAt: now,
-          lastLoginDevice: device,
-          loginCount,
-        },
-        { merge: true }
-      );
-    } catch (err: any) {
-      console.warn('Firestore recordUserLogin fallback:', err.message);
-    }
+    // quiet fail
   }
-
-  // Record login event in Audit Logs for compliance tracking
-  await logAuditAction({
-    userId: user.id,
-    userName: user.displayName,
-    userRole: formatRoleName(user.role),
-    action: 'USER_LOGIN',
-    details: `Pengguna berhasil login dari perangkat: ${device}. Status: Aktif.`,
-    device,
-  });
 }
 
 // ==========================================
-// 2. AUDIT LOGS PERSISTENCE (WHO ACCESSED WHAT)
+// 2. GRIEVANCE CASES PERSISTENCE
 // ==========================================
 
-export async function logAuditAction(log: Omit<AuditLog, 'id' | 'timestamp'>): Promise<void> {
-  const newLog: AuditLog = {
-    ...log,
-    id: `aud-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
-    timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
-    device: log.device || getDeviceSummary(),
-  };
-
-  try {
-    await setDoc(doc(db, 'audit_logs', newLog.id), newLog);
-  } catch (err: any) {
-    console.warn('Audit log write local sync:', err.message);
-  }
-
-  const existingLogs = getLocalData<AuditLog[]>('audit_logs', INITIAL_AUDIT_LOGS);
-  setLocalData('audit_logs', [newLog, ...existingLogs.slice(0, 199)]);
-}
-
-export function subscribeToAuditLogs(callback: (logs: AuditLog[]) => void) {
-  const q = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(150));
-
-  const unsubscribe = onSnapshot(
-    q,
-    (snapshot) => {
-      const logsList: AuditLog[] = [];
-      snapshot.forEach((d) => {
-        logsList.push({ id: d.id, ...(d.data() as Omit<AuditLog, 'id'>) });
-      });
-      setLocalData('audit_logs', logsList);
-      callback(logsList);
-    },
-    (error) => {
-      console.warn('Audit logs listener fallback:', error.message);
-      const cached = getLocalData<AuditLog[]>('audit_logs', INITIAL_AUDIT_LOGS);
-      callback(cached);
-    }
-  );
-
-  return unsubscribe;
-}
-
-export async function getAuditLogs(): Promise<AuditLog[]> {
-  try {
-    const q = query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(150));
-    const snapshot = await getDocs(q);
-    if (!snapshot.empty) {
-      const list = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<AuditLog, 'id'>) }));
-      setLocalData('audit_logs', list);
-      return list;
-    }
-  } catch (err: any) {
-    console.warn('Audit logs read local fallback:', err.message);
-  }
-  return getLocalData('audit_logs', INITIAL_AUDIT_LOGS);
-}
-
-// ==========================================
-// 3. GRIEVANCE CASES CLOUD PERSISTENCE
-// ==========================================
-
-// Subscribe to Cases with real-time Firestore sync
-export function subscribeToCases(
-  callback: (cases: GrievanceCase[]) => void,
-  user?: UserProfile | null
-) {
-  const casesCollection = collection(db, 'cases');
-
-  const unsubscribe = onSnapshot(
-    casesCollection,
-    (snapshot) => {
-      const casesList: GrievanceCase[] = [];
-      snapshot.forEach((docSnap) => {
-        casesList.push({ id: docSnap.id, ...(docSnap.data() as Omit<GrievanceCase, 'id'>) });
-      });
-      casesList.sort((a, b) => new Date(b.dateReceived).getTime() - new Date(a.dateReceived).getTime());
-      
-      // Update local storage cache
-      setLocalData('cases', casesList);
-      callback(filterCasesByRole(casesList, user));
-    },
-    (error) => {
-      console.warn('Firestore Cases onSnapshot notice, using cached repository:', error.message);
-      const cached = getLocalData<GrievanceCase[]>('cases', []);
-      callback(filterCasesByRole(cached, user));
-    }
-  );
-
-  return unsubscribe;
-}
-
-// Granular Role-Based Access Control (RBAC) filtering:
-// - Department PICs can ONLY see cases assigned to them or their assigned department
-// - HR Investigator can ONLY see cases assigned to them or within HR
-// - HR Admin and HR Lead have full enterprise visibility
 export function filterCasesByRole(cases: GrievanceCase[], user?: UserProfile | null): GrievanceCase[] {
   if (!user) return [];
 
@@ -358,107 +458,196 @@ export function filterCasesByRole(cases: GrievanceCase[], user?: UserProfile | n
     });
   }
 
-  // HR Admin and HR Lead have full enterprise visibility
   return cases;
 }
 
-// Add New Case directly to Firestore
+export function subscribeToCases(
+  callback: (cases: GrievanceCase[]) => void,
+  user?: UserProfile | null
+) {
+  const casesCollection = collection(db, 'cases');
+
+  const unsubscribe = onSnapshot(
+    casesCollection,
+    (snapshot) => {
+      const casesList: GrievanceCase[] = [];
+      snapshot.forEach((docSnap) => {
+        casesList.push({ id: docSnap.id, ...(docSnap.data() as Omit<GrievanceCase, 'id'>) });
+      });
+      // Sort primarily by Grievance Date (dateReceived) descending
+      casesList.sort((a, b) => new Date(b.dateReceived).getTime() - new Date(a.dateReceived).getTime());
+      
+      setLocalData('cases', casesList);
+      callback(filterCasesByRole(casesList, user));
+    },
+    (error) => {
+      console.warn('Firestore Cases onSnapshot notice, using cached repository:', error.message);
+      const cached = getLocalData<GrievanceCase[]>('cases', INITIAL_CASES);
+      callback(filterCasesByRole(cached, user));
+    }
+  );
+
+  return unsubscribe;
+}
+
 export async function createCase(
   caseData: Omit<GrievanceCase, 'id'>,
   user: UserProfile
 ): Promise<GrievanceCase> {
-  const newId = `case-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-  const fullCase: GrievanceCase = {
-    ...caseData,
-    id: newId,
-    lastUpdate: new Date().toISOString().replace('T', ' ').substring(0, 16),
-  };
+  const currentCases = getLocalData<GrievanceCase[]>('cases', INITIAL_CASES);
+  const normalizedTicketId = (caseData.ticketId || '').trim().toUpperCase();
+  
+  // Deduplication check: if case with ticketId already exists, update instead of creating duplicate
+  const existingCase = currentCases.find(
+    (c) => c.ticketId && c.ticketId.trim().toUpperCase() === normalizedTicketId
+  );
+
+  const targetId = existingCase ? existingCase.id : `case-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+  
+  // Prepare payload: sets closingDate: null if not Closed, sanitizes all fields, calculates SLA strictly
+  const prepared = prepareCasePayload(
+    {
+      ...caseData,
+      id: targetId,
+      ticketId: normalizedTicketId || `GRV-${Date.now().toString(36).toUpperCase()}`,
+    },
+    `GRV-${Date.now().toString(36).toUpperCase()}`
+  ) as GrievanceCase;
+
+  let firestoreFailed = false;
+  let syncErrMessage = '';
 
   try {
-    await setDoc(doc(db, 'cases', newId), fullCase);
+    await setDoc(doc(db, 'cases', targetId), prepared);
+    clearSyncError();
   } catch (error: any) {
-    console.warn('Saving case locally fallback:', error.message);
+    firestoreFailed = true;
+    syncErrMessage = error?.message || 'Gagal menyimpan ke Firestore';
+    console.error('Firestore save case error:', error);
+    notifySyncError(`Gagal sinkronisasi kasus #${prepared.ticketId} ke Cloud Firestore: ${syncErrMessage}`);
   }
 
-  // Update local cache
-  const currentCases = getLocalData('cases', INITIAL_CASES);
-  const updated = [fullCase, ...currentCases];
-  setLocalData('cases', updated);
+  // Update local cache without duplication
+  const existingIdx = currentCases.findIndex((c) => c.id === targetId || (c.ticketId && c.ticketId.trim().toUpperCase() === normalizedTicketId));
+  let updatedList: GrievanceCase[];
+  if (existingIdx >= 0) {
+    updatedList = currentCases.map((c, idx) => (idx === existingIdx ? prepared : c));
+  } else {
+    updatedList = [prepared, ...currentCases];
+  }
+  setLocalData('cases', updatedList);
 
-  // Add audit log
   await logAuditAction({
     userId: user.id,
     userName: user.displayName,
     userRole: formatRoleName(user.role),
-    action: 'REGISTER_GRIEVANCE',
-    caseId: newId,
-    ticketId: fullCase.ticketId,
-    details: `Mendaftarkan pengaduan baru #${fullCase.ticketId} (${fullCase.department} - ${fullCase.complaintCategory}) melalui saluran ${fullCase.channelReceived}. Prioritas: ${fullCase.priority}.`,
+    action: existingCase ? 'UPDATE_CASE_DEDUPLICATED' : 'REGISTER_GRIEVANCE',
+    caseId: targetId,
+    ticketId: prepared.ticketId,
+    details: `${existingCase ? 'Pembaruan otomatis (deduplikasi)' : 'Mendaftarkan'} keluhan baru #${prepared.ticketId} (${prepared.department} - ${prepared.complaintCategory}). Status: ${prepared.status}. Target Selesai: ${prepared.dueDate}.${firestoreFailed ? ' [TERCATAT SECARA LOKAL - PERLU SYNC]' : ' [SYNCED FIRESTORE]'}`,
   });
 
-  return fullCase;
+  return prepared;
 }
 
-// Update Case in Firestore
 export async function updateCaseRecord(
   caseId: string,
   updates: Partial<GrievanceCase>,
   user: UserProfile,
   reason?: string
 ): Promise<void> {
-  const currentCases = getLocalData('cases', INITIAL_CASES);
+  const currentCases = getLocalData<GrievanceCase[]>('cases', INITIAL_CASES);
   const targetIndex = currentCases.findIndex((c) => c.id === caseId);
   const existingCase = currentCases[targetIndex];
 
-  const updatedRecord: GrievanceCase = {
+  // Re-calculate target due date if grievance date or priority changed and no explicit dueDate passed
+  let dueDate = updates.dueDate || existingCase?.dueDate;
+  const dateReceived = updates.dateReceived || existingCase?.dateReceived || new Date().toISOString().substring(0, 10);
+  const priority = updates.priority || existingCase?.priority || 'Major';
+  const status = updates.status || existingCase?.status || 'Open';
+
+  if (!updates.dueDate && (updates.dateReceived || updates.priority)) {
+    dueDate = calculateDueDateFromGrievanceDate(dateReceived, priority);
+  }
+
+  // Rule A.3 & A.4 & A.5: closingDate must be null if status is not Closed!
+  const isClosed = status === 'Closed';
+  let cleanClosingDate: string | null = null;
+  if (isClosed) {
+    cleanClosingDate = updates.closingDate || existingCase?.closingDate || new Date().toISOString().substring(0, 10);
+  } else {
+    cleanClosingDate = null; // Reopened or non-closed status resets to null
+  }
+
+  const { slaStatus, slaHoursLeft } = calculateSlaStatus(dateReceived, dueDate || '', status, cleanClosingDate);
+
+  const rawMerged: GrievanceCase = {
     ...(existingCase || ({} as GrievanceCase)),
     ...updates,
+    id: caseId,
+    dueDate: dueDate || existingCase?.dueDate || '',
+    closingDate: cleanClosingDate,
+    slaStatus: updates.slaStatus || slaStatus,
+    slaHoursLeft: isClosed ? 0 : (updates.slaHoursLeft !== undefined ? updates.slaHoursLeft : slaHoursLeft),
     lastUpdate: new Date().toISOString().replace('T', ' ').substring(0, 16),
   };
 
+  const cleanPayload = prepareCasePayload(rawMerged) as GrievanceCase;
+
+  let firestoreFailed = false;
   try {
-    await updateDoc(doc(db, 'cases', caseId), {
-      ...updates,
-      lastUpdate: updatedRecord.lastUpdate,
-    });
-  } catch {
-    try {
-      await setDoc(doc(db, 'cases', caseId), updatedRecord, { merge: true });
-    } catch (err: any) {
-      console.warn('Firestore updateCaseRecord fallback:', err.message);
-    }
+    await setDoc(doc(db, 'cases', caseId), cleanPayload, { merge: true });
+    clearSyncError();
+  } catch (err: any) {
+    firestoreFailed = true;
+    console.error('Firestore updateCaseRecord error:', err);
+    notifySyncError(`Gagal memperbarui kasus #${cleanPayload.ticketId || caseId} di Cloud Firestore: ${err.message}`);
   }
 
   if (targetIndex >= 0) {
-    currentCases[targetIndex] = updatedRecord;
+    currentCases[targetIndex] = cleanPayload;
     setLocalData('cases', currentCases);
   }
 
-  // Audit
-  if (updates.status && existingCase && updates.status !== existingCase.status) {
-    await logAuditAction({
-      userId: user.id,
-      userName: user.displayName,
-      userRole: formatRoleName(user.role),
-      action: 'UPDATE_STATUS',
-      caseId,
-      ticketId: updatedRecord.ticketId,
-      details: `Status kasus diubah dari "${existingCase.status}" menjadi "${updates.status}". ${reason ? `Catatan: ${reason}` : ''}`,
-    });
-  } else {
-    await logAuditAction({
-      userId: user.id,
-      userName: user.displayName,
-      userRole: formatRoleName(user.role),
-      action: 'UPDATE_CASE',
-      caseId,
-      ticketId: updatedRecord.ticketId,
-      details: `Memperbarui data kasus: ${Object.keys(updates).join(', ')}. ${reason ? `Catatan: ${reason}` : ''}`,
-    });
-  }
+  await logAuditAction({
+    userId: user.id,
+    userName: user.displayName,
+    userRole: formatRoleName(user.role),
+    action: 'UPDATE_CASE',
+    caseId,
+    ticketId: cleanPayload.ticketId,
+    details: `Memperbarui data kasus: ${Object.keys(updates).join(', ')}. ${reason ? `Alasan: ${reason}.` : ''}${firestoreFailed ? ' [TERCATAT SECARA LOKAL - PERLU SYNC]' : ' [SYNCED FIRESTORE]'}`,
+  });
 }
 
-// Delete Case (for erroneous input / salah input)
+/**
+ * Resync offline/local cases to Firestore without creating duplicates.
+ * Uses ticketId & id matching to safely merge records.
+ */
+export async function syncOfflineCasesToFirestore(): Promise<{ synced: number; errors: string[] }> {
+  const currentCases = getLocalData<GrievanceCase[]>('cases', []);
+  let synced = 0;
+  const errors: string[] = [];
+
+  for (const c of currentCases) {
+    try {
+      const clean = prepareCasePayload(c);
+      await setDoc(doc(db, 'cases', c.id), clean, { merge: true });
+      synced++;
+    } catch (err: any) {
+      errors.push(`Kasus #${c.ticketId}: ${err.message}`);
+    }
+  }
+
+  if (errors.length === 0) {
+    clearSyncError();
+  } else {
+    notifySyncError(`${errors.length} kasus gagal disinkronkan ke Firestore.`);
+  }
+
+  return { synced, errors };
+}
+
 export async function deleteCaseRecord(
   caseId: string,
   user: UserProfile,
@@ -468,49 +657,15 @@ export async function deleteCaseRecord(
   const targetCase = currentCases.find((c) => c.id === caseId);
   const ticketId = targetCase?.ticketId || caseId;
 
-  // 1. Remove from local storage
   const updatedCases = currentCases.filter((c) => c.id !== caseId);
   setLocalData('cases', updatedCases);
 
-  // 2. Remove associated subcollections from local storage
-  const localFindings = getLocalData<Record<string, InvestigationFinding[]>>('findings', INITIAL_FINDINGS);
-  if (localFindings[caseId]) {
-    delete localFindings[caseId];
-    setLocalData('findings', localFindings);
-  }
-
-  const localRca = getLocalData<Record<string, RootCauseAnalysis>>('root_causes', INITIAL_ROOT_CAUSES);
-  if (localRca[caseId]) {
-    delete localRca[caseId];
-    setLocalData('root_causes', localRca);
-  }
-
-  const localActionPlans = getLocalData<Record<string, ActionPlan[]>>('action_plans', INITIAL_ACTION_PLANS);
-  if (localActionPlans[caseId]) {
-    delete localActionPlans[caseId];
-    setLocalData('action_plans', localActionPlans);
-  }
-
-  const localComms = getLocalData<Record<string, CommunicationLog[]>>('communications', INITIAL_COMMUNICATIONS);
-  if (localComms[caseId]) {
-    delete localComms[caseId];
-    setLocalData('communications', localComms);
-  }
-
-  const localEvidence = getLocalData<Record<string, EvidenceItem[]>>('evidence', INITIAL_EVIDENCE);
-  if (localEvidence[caseId]) {
-    delete localEvidence[caseId];
-    setLocalData('evidence', localEvidence);
-  }
-
-  // 3. Delete from Firestore
   try {
     await deleteDoc(doc(db, 'cases', caseId));
   } catch (error: any) {
-    console.warn('Firestore deleteDoc fallback to local state:', error.message);
+    console.warn('Firestore deleteDoc fallback:', error.message);
   }
 
-  // 4. Audit Log
   await logAuditAction({
     userId: user.id,
     userName: user.displayName,
@@ -518,73 +673,97 @@ export async function deleteCaseRecord(
     action: 'DELETE_CASE',
     caseId,
     ticketId,
-    details: `Menghapus kasus #${ticketId} (${targetCase ? targetCase.department + ' - ' + targetCase.complaintCategory : ''}) karena salah input. Alasan: ${reason || 'Salah input pengaduan'}.`,
+    details: `Menghapus kasus #${ticketId} (${targetCase?.department} - ${targetCase?.complaintCategory}). Alasan: ${reason}.`,
   });
 }
 
 // ==========================================
-// 4. SUBCOLLECTIONS PERSISTENCE
+// 3. INVESTIGATION MANAGEMENT (NO SIGNATURES)
 // ==========================================
 
-// Subcollection: Investigations
-export async function getCaseFindings(caseId: string): Promise<InvestigationFinding[]> {
+export async function getCaseInvestigations(caseId: string): Promise<InvestigationRecord[]> {
   try {
     const q = collection(db, 'cases', caseId, 'investigations');
     const snapshot = await getDocs(q);
     if (!snapshot.empty) {
-      return snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<InvestigationFinding, 'id'>) }));
+      return snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<InvestigationRecord, 'id'>) }));
     }
   } catch (err: any) {
-    console.warn('Fetching findings fallback:', err.message);
+    console.warn('Fetching investigations fallback:', err.message);
   }
-  const localMap = getLocalData<Record<string, InvestigationFinding[]>>('findings', INITIAL_FINDINGS);
+  const localMap = getLocalData<Record<string, InvestigationRecord[]>>('investigations', {});
   return localMap[caseId] || [];
 }
 
-export async function addCaseFinding(
+export async function saveCaseInvestigation(
   caseId: string,
-  finding: Omit<InvestigationFinding, 'id'>,
+  record: Omit<InvestigationRecord, 'id'>,
   user: UserProfile
-): Promise<InvestigationFinding> {
-  const newId = `fnd-${Date.now().toString(36)}`;
-  const fullFinding: InvestigationFinding = { ...finding, id: newId, caseId };
+): Promise<InvestigationRecord> {
+  const newId = `inv-${Date.now().toString(36)}`;
+  const fullRecord: InvestigationRecord = {
+    ...record,
+    id: newId,
+    caseId,
+    investigatorName: user.displayName,
+    investigatorId: user.id,
+    createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+  };
 
   try {
-    await setDoc(doc(db, 'cases', caseId, 'investigations', newId), fullFinding);
+    await setDoc(doc(db, 'cases', caseId, 'investigations', newId), sanitizeForFirestore(fullRecord));
   } catch (err: any) {
-    console.warn('Cached finding locally:', err.message);
+    console.warn('Firestore save investigation fallback:', err.message);
   }
 
-  const localMap = getLocalData<Record<string, InvestigationFinding[]>>('findings', INITIAL_FINDINGS);
-  localMap[caseId] = [...(localMap[caseId] || []), fullFinding];
-  setLocalData('findings', localMap);
+  const localMap = getLocalData<Record<string, InvestigationRecord[]>>('investigations', {});
+  localMap[caseId] = [fullRecord, ...(localMap[caseId] || [])];
+  setLocalData('investigations', localMap);
 
-  await logAuditAction({
-    userId: user.id,
-    userName: user.displayName,
-    userRole: formatRoleName(user.role),
-    action: 'ADD_INVESTIGATION_NOTE',
-    caseId,
-    details: `Mencatat wawancara investigasi: ${finding.intervieweeName} (${finding.interviewType}).`,
-  });
-
-  return fullFinding;
+  return fullRecord;
 }
 
-// Subcollection: Root Cause Analysis (5 Whys)
-export async function getCaseRootCause(caseId: string): Promise<RootCauseAnalysis | null> {
+// Backward compatibility alias
+export const getCaseFindings = getCaseInvestigations;
+export const addCaseFinding = (caseId: string, item: any, user: UserProfile) => {
+  return saveCaseInvestigation(
+    caseId,
+    {
+      caseId,
+      ticketId: item.ticketId || '',
+      investigationDate: item.dateConducted || item.investigationDate || new Date().toISOString().substring(0, 10),
+      investigationDetails: item.title || item.investigationDetails || '',
+      interviewNotes: item.statementSummary || item.interviewNotes || '',
+      witnessInfo: item.intervieweeName || item.witnessInfo || '',
+      supportingInfo: item.credibilityAssessment || item.supportingInfo || '',
+      evidenceRef: item.evidenceRef || '',
+      findings: item.keyFindings || item.findings || '',
+      conclusion: item.conclusion || '',
+      recommendedActions: item.recommendedActions || '',
+      investigatorName: user.displayName,
+      investigatorId: user.id,
+      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    },
+    user
+  );
+};
+
+// ==========================================
+// 4. ROOT CAUSE ANALYSIS (6M ISHIKAWA)
+// ==========================================
+
+export async function getCaseRootCauses(caseId: string): Promise<RootCauseAnalysis[]> {
   try {
-    const q = collection(db, 'cases', caseId, 'root_causes');
+    const q = collection(db, 'cases', caseId, 'root_causes_6m');
     const snapshot = await getDocs(q);
     if (!snapshot.empty) {
-      const first = snapshot.docs[0];
-      return { id: first.id, ...(first.data() as Omit<RootCauseAnalysis, 'id'>) };
+      return snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<RootCauseAnalysis, 'id'>) }));
     }
   } catch (err: any) {
-    console.warn('Fetching RCA fallback:', err.message);
+    console.warn('Fetching 6M RCA fallback:', err.message);
   }
-  const localMap = getLocalData<Record<string, RootCauseAnalysis>>('root_causes', INITIAL_ROOT_CAUSES);
-  return localMap[caseId] || null;
+  const localMap = getLocalData<Record<string, RootCauseAnalysis[]>>('root_causes_6m', {});
+  return localMap[caseId] || [];
 }
 
 export async function saveCaseRootCause(
@@ -592,37 +771,41 @@ export async function saveCaseRootCause(
   rca: Omit<RootCauseAnalysis, 'id'>,
   user: UserProfile
 ): Promise<RootCauseAnalysis> {
-  const rcaId = `rc-${caseId}`;
+  const rcaId = `rc6m-${rca.category.toLowerCase()}-${Date.now().toString(36)}`;
   const fullRca: RootCauseAnalysis = {
     ...rca,
     id: rcaId,
     caseId,
+    analystId: user.id,
+    analystName: user.displayName,
     updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
   };
 
   try {
-    await setDoc(doc(db, 'cases', caseId, 'root_causes', rcaId), fullRca);
+    await setDoc(doc(db, 'cases', caseId, 'root_causes_6m', rcaId), sanitizeForFirestore(fullRca));
   } catch (err: any) {
-    console.warn('Cached RCA locally:', err.message);
+    console.warn('Firestore save 6M RCA fallback:', err.message);
   }
 
-  const localMap = getLocalData<Record<string, RootCauseAnalysis>>('root_causes', INITIAL_ROOT_CAUSES);
-  localMap[caseId] = fullRca;
-  setLocalData('root_causes', localMap);
-
-  await logAuditAction({
-    userId: user.id,
-    userName: user.displayName,
-    userRole: formatRoleName(user.role),
-    action: 'SAVE_ROOT_CAUSE_ANALYSIS',
-    caseId,
-    details: `Menyimpan Lembar 5 Whys Root Cause Analysis. Kategori: ${rca.primaryCategory}.`,
-  });
+  const localMap = getLocalData<Record<string, RootCauseAnalysis[]>>('root_causes_6m', {});
+  const existing = localMap[caseId] || [];
+  const filtered = existing.filter((item) => item.category !== rca.category);
+  localMap[caseId] = [...filtered, fullRca];
+  setLocalData('root_causes_6m', localMap);
 
   return fullRca;
 }
 
-// Subcollection: Action Plans (CAPA)
+// Backward compatibility helper
+export async function getCaseRootCause(caseId: string): Promise<RootCauseAnalysis | null> {
+  const list = await getCaseRootCauses(caseId);
+  return list[0] || null;
+}
+
+// ==========================================
+// 5. CAPA / ACTION PLAN (ADD, EDIT, REVISE)
+// ==========================================
+
 export async function getCaseActionPlans(caseId: string): Promise<ActionPlan[]> {
   try {
     const q = collection(db, 'cases', caseId, 'action_plans');
@@ -633,129 +816,105 @@ export async function getCaseActionPlans(caseId: string): Promise<ActionPlan[]> 
   } catch (err: any) {
     console.warn('Action plans read fallback:', err.message);
   }
-  const localMap = getLocalData<Record<string, ActionPlan[]>>('action_plans', INITIAL_ACTION_PLANS);
+  const localMap = getLocalData<Record<string, ActionPlan[]>>('action_plans', {});
   return localMap[caseId] || [];
 }
 
 export async function addCaseActionPlan(
   caseId: string,
-  actionItem: Omit<ActionPlan, 'id'>,
+  plan: Omit<ActionPlan, 'id' | 'createdAt'>,
   user: UserProfile
 ): Promise<ActionPlan> {
-  const newId = `act-${Date.now().toString(36)}`;
-  const fullPlan: ActionPlan = { ...actionItem, id: newId, caseId };
+  const newId = `capa-${Date.now().toString(36)}`;
+  const fullPlan: ActionPlan = {
+    ...plan,
+    id: newId,
+    caseId,
+    createdAt: new Date().toISOString().substring(0, 10),
+  };
 
   try {
-    await setDoc(doc(db, 'cases', caseId, 'action_plans', newId), fullPlan);
+    await setDoc(doc(db, 'cases', caseId, 'action_plans', newId), sanitizeForFirestore(fullPlan));
   } catch (err: any) {
-    console.warn('Cached action plan locally:', err.message);
+    console.warn('Cached action plan fallback:', err.message);
   }
 
-  const localMap = getLocalData<Record<string, ActionPlan[]>>('action_plans', INITIAL_ACTION_PLANS);
+  const localMap = getLocalData<Record<string, ActionPlan[]>>('action_plans', {});
   localMap[caseId] = [...(localMap[caseId] || []), fullPlan];
   setLocalData('action_plans', localMap);
-
-  await logAuditAction({
-    userId: user.id,
-    userName: user.displayName,
-    userRole: formatRoleName(user.role),
-    action: 'CREATE_ACTION_PLAN',
-    caseId,
-    details: `Menambahkan item CAPA: "${actionItem.title}" ditugaskan ke ${actionItem.assignedTo}.`,
-  });
 
   return fullPlan;
 }
 
-export async function updateActionPlanStatus(
+export async function updateCaseActionPlan(
   caseId: string,
   planId: string,
-  status: ActionPlan['status'],
-  user: UserProfile,
-  verificationNotes?: string
+  updates: Partial<ActionPlan>,
+  user: UserProfile
 ): Promise<void> {
-  const localMap = getLocalData<Record<string, ActionPlan[]>>('action_plans', INITIAL_ACTION_PLANS);
-  const items = localMap[caseId] || [];
-  const target = items.find((i) => i.id === planId);
-  if (target) {
-    target.status = status;
-    if (status === 'Completed' || status === 'Verified') {
-      target.completedDate = new Date().toISOString().substring(0, 10);
-    }
-    if (verificationNotes) {
-      target.verificationNotes = verificationNotes;
-      target.verifiedBy = user.displayName;
-    }
+  const localMap = getLocalData<Record<string, ActionPlan[]>>('action_plans', {});
+  const list = localMap[caseId] || [];
+  const targetIndex = list.findIndex((p) => p.id === planId);
+
+  const merged = {
+    ...(list[targetIndex] || ({} as ActionPlan)),
+    ...updates,
+    updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+  };
+
+  if (targetIndex >= 0) {
+    list[targetIndex] = merged;
+    localMap[caseId] = list;
     setLocalData('action_plans', localMap);
   }
 
   try {
-    await updateDoc(doc(db, 'cases', caseId, 'action_plans', planId), {
-      status,
-      completedDate: status === 'Completed' ? new Date().toISOString().substring(0, 10) : null,
-      verificationNotes: verificationNotes || null,
-      verifiedBy: verificationNotes ? user.displayName : null,
-    });
+    await setDoc(doc(db, 'cases', caseId, 'action_plans', planId), sanitizeForFirestore(merged), { merge: true });
   } catch (err: any) {
     console.warn('Action plan update error:', err.message);
   }
-
-  await logAuditAction({
-    userId: user.id,
-    userName: user.displayName,
-    userRole: formatRoleName(user.role),
-    action: 'UPDATE_ACTION_PLAN_STATUS',
-    caseId,
-    details: `Mengubah progress CAPA menjadi status ${status}.`,
-  });
 }
 
-// Subcollection: Communication Log
-export async function getCaseCommunications(caseId: string): Promise<CommunicationLog[]> {
-  try {
-    const q = collection(db, 'cases', caseId, 'communications');
-    const snapshot = await getDocs(q);
-    if (!snapshot.empty) {
-      return snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<CommunicationLog, 'id'>) }));
-    }
-  } catch (err: any) {
-    console.warn('Comms read fallback:', err.message);
-  }
-  const localMap = getLocalData<Record<string, CommunicationLog[]>>('comms', INITIAL_COMMUNICATIONS);
-  return localMap[caseId] || [];
-}
-
-export async function addCaseCommunication(
+export async function deleteCaseActionPlan(
   caseId: string,
-  comm: Omit<CommunicationLog, 'id'>,
+  planId: string,
   user: UserProfile
-): Promise<CommunicationLog> {
-  const newId = `com-${Date.now().toString(36)}`;
-  const fullComm: CommunicationLog = { ...comm, id: newId, caseId };
-
-  try {
-    await setDoc(doc(db, 'cases', caseId, 'communications', newId), fullComm);
-  } catch (err: any) {
-    console.warn('Comms save local sync:', err.message);
+): Promise<void> {
+  const localMap = getLocalData<Record<string, ActionPlan[]>>('action_plans', {});
+  if (localMap[caseId]) {
+    localMap[caseId] = localMap[caseId].filter((p) => p.id !== planId);
+    setLocalData('action_plans', localMap);
   }
 
-  const localMap = getLocalData<Record<string, CommunicationLog[]>>('comms', INITIAL_COMMUNICATIONS);
-  localMap[caseId] = [...(localMap[caseId] || []), fullComm];
-  setLocalData('comms', localMap);
-
-  await logAuditAction({
-    userId: user.id,
-    userName: user.displayName,
-    userRole: formatRoleName(user.role),
-    action: 'LOG_COMMUNICATION',
-    caseId,
-    details: `Mencatat korespondensi ${comm.type}: "${comm.subject}" (Tujuan: ${comm.recipient}).`,
-  });
-
-  return fullComm;
+  try {
+    await deleteDoc(doc(db, 'cases', caseId, 'action_plans', planId));
+  } catch (err: any) {
+    console.warn('Action plan delete error:', err.message);
+  }
 }
 
-// Subcollection: Evidence Management
+export const updateActionPlanStatus = async (
+  caseId: string,
+  planId: string,
+  status: any,
+  user: UserProfile
+) => {
+  const progressStatus = status === 'Completed' || status === 'Verified' ? 'Completed' : 'Progress';
+  await updateCaseActionPlan(
+    caseId,
+    planId,
+    {
+      progressStatus,
+      completionDate: progressStatus === 'Completed' ? new Date().toISOString().substring(0, 10) : null,
+    },
+    user
+  );
+};
+
+// ==========================================
+// 6. EVIDENCE MANAGEMENT (JPG, PNG, PDF)
+// ==========================================
+
 export async function getCaseEvidence(caseId: string, user?: UserProfile | null): Promise<EvidenceItem[]> {
   let list: EvidenceItem[] = [];
   try {
@@ -768,11 +927,10 @@ export async function getCaseEvidence(caseId: string, user?: UserProfile | null)
     console.warn('Evidence read fallback:', err.message);
   }
   if (list.length === 0) {
-    const localMap = getLocalData<Record<string, EvidenceItem[]>>('evidence', INITIAL_EVIDENCE);
+    const localMap = getLocalData<Record<string, EvidenceItem[]>>('evidence', {});
     list = localMap[caseId] || [];
   }
 
-  // Security constraint: If Department PIC, mask confidential evidence files
   if (user && user.role === 'department_pic') {
     return list.filter((e) => !e.isConfidential);
   }
@@ -788,29 +946,77 @@ export async function addCaseEvidence(
   const fullEvidence: EvidenceItem = { ...evidence, id: newId, caseId };
 
   try {
-    await setDoc(doc(db, 'cases', caseId, 'evidence', newId), fullEvidence);
+    await setDoc(doc(db, 'cases', caseId, 'evidence', newId), sanitizeForFirestore(fullEvidence));
   } catch (err: any) {
-    console.warn('Evidence save local sync:', err.message);
+    console.warn('Evidence save fallback:', err.message);
   }
 
-  const localMap = getLocalData<Record<string, EvidenceItem[]>>('evidence', INITIAL_EVIDENCE);
-  localMap[caseId] = [...(localMap[caseId] || []), fullEvidence];
+  const localMap = getLocalData<Record<string, EvidenceItem[]>>('evidence', {});
+  localMap[caseId] = [fullEvidence, ...(localMap[caseId] || [])];
   setLocalData('evidence', localMap);
-
-  await logAuditAction({
-    userId: user.id,
-    userName: user.displayName,
-    userRole: formatRoleName(user.role),
-    action: 'UPLOAD_EVIDENCE',
-    caseId,
-    details: `Mengunggah berkas bukti: "${evidence.title}" (${evidence.fileName}) [Kerahasiaan: ${evidence.isConfidential ? 'Rahasia' : 'Biasa'}].`,
-  });
 
   return fullEvidence;
 }
 
+export async function deleteCaseEvidence(
+  caseId: string,
+  evidenceId: string,
+  user: UserProfile
+): Promise<void> {
+  const localMap = getLocalData<Record<string, EvidenceItem[]>>('evidence', {});
+  if (localMap[caseId]) {
+    localMap[caseId] = localMap[caseId].filter((e) => e.id !== evidenceId);
+    setLocalData('evidence', localMap);
+  }
+
+  try {
+    await deleteDoc(doc(db, 'cases', caseId, 'evidence', evidenceId));
+  } catch (err: any) {
+    console.warn('Evidence delete fallback:', err.message);
+  }
+}
+
 // ==========================================
-// 5. MASTER DATA (CATEGORIES & DEPARTMENTS)
+// 7. COMMUNICATION LOG
+// ==========================================
+
+export async function getCaseCommunications(caseId: string): Promise<CommunicationLog[]> {
+  try {
+    const q = collection(db, 'cases', caseId, 'communications');
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+      return snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<CommunicationLog, 'id'>) }));
+    }
+  } catch (err: any) {
+    console.warn('Comms read fallback:', err.message);
+  }
+  const localMap = getLocalData<Record<string, CommunicationLog[]>>('communications', {});
+  return localMap[caseId] || [];
+}
+
+export async function addCaseCommunication(
+  caseId: string,
+  comm: Omit<CommunicationLog, 'id'>,
+  user: UserProfile
+): Promise<CommunicationLog> {
+  const newId = `com-${Date.now().toString(36)}`;
+  const fullComm: CommunicationLog = { ...comm, id: newId, caseId };
+
+  try {
+    await setDoc(doc(db, 'cases', caseId, 'communications', newId), sanitizeForFirestore(fullComm));
+  } catch (err: any) {
+    console.warn('Comms save fallback:', err.message);
+  }
+
+  const localMap = getLocalData<Record<string, CommunicationLog[]>>('communications', {});
+  localMap[caseId] = [fullComm, ...(localMap[caseId] || [])];
+  setLocalData('communications', localMap);
+
+  return fullComm;
+}
+
+// ==========================================
+// 8. MASTER DATA
 // ==========================================
 
 export async function getCategories(): Promise<MasterCategory[]> {
@@ -819,32 +1025,24 @@ export async function getCategories(): Promise<MasterCategory[]> {
     if (docSnap.exists()) {
       const data = docSnap.data();
       if (Array.isArray(data.list) && data.list.length > 0) {
-        setLocalData('master_categories_sji_v4', data.list);
+        setLocalData('master_categories', data.list);
         return data.list;
       }
     }
-    // Seed default categories if not present in Firestore
     await setDoc(doc(db, 'master_data', 'categories'), { list: INITIAL_CATEGORIES });
-    setLocalData('master_categories_sji_v4', INITIAL_CATEGORIES);
+    setLocalData('master_categories', INITIAL_CATEGORIES);
     return INITIAL_CATEGORIES;
-  } catch (err: any) {
-    console.warn('Error fetching categories from Firestore, using cache:', err.message);
+  } catch {
+    return getLocalData<MasterCategory[]>('master_categories', INITIAL_CATEGORIES);
   }
-
-  const cached = getLocalData<MasterCategory[]>('master_categories_sji_v4', []);
-  if (!cached || cached.length === 0) {
-    setLocalData('master_categories_sji_v4', INITIAL_CATEGORIES);
-    return INITIAL_CATEGORIES;
-  }
-  return cached;
 }
 
 export async function saveCategories(categories: MasterCategory[]): Promise<void> {
-  setLocalData('master_categories_sji_v4', categories);
+  setLocalData('master_categories', categories);
   try {
     await setDoc(doc(db, 'master_data', 'categories'), { list: categories });
   } catch (err: any) {
-    console.warn('Error saving categories to Firestore:', err.message);
+    console.warn('Error saving categories:', err.message);
   }
 }
 
@@ -854,122 +1052,278 @@ export async function getDepartments(): Promise<MasterDepartment[]> {
     if (docSnap.exists()) {
       const data = docSnap.data();
       if (Array.isArray(data.list) && data.list.length > 0) {
-        setLocalData('master_departments_sji_v4', data.list);
+        setLocalData('master_departments', data.list);
         return data.list;
       }
     }
-    // Seed default departments if not present in Firestore
     await setDoc(doc(db, 'master_data', 'departments'), { list: INITIAL_DEPARTMENTS });
-    setLocalData('master_departments_sji_v4', INITIAL_DEPARTMENTS);
+    setLocalData('master_departments', INITIAL_DEPARTMENTS);
     return INITIAL_DEPARTMENTS;
-  } catch (err: any) {
-    console.warn('Error fetching departments from Firestore, using cache:', err.message);
+  } catch {
+    return getLocalData<MasterDepartment[]>('master_departments', INITIAL_DEPARTMENTS);
   }
-
-  const cached = getLocalData<MasterDepartment[]>('master_departments_sji_v4', []);
-  if (!cached || cached.length === 0) {
-    setLocalData('master_departments_sji_v4', INITIAL_DEPARTMENTS);
-    return INITIAL_DEPARTMENTS;
-  }
-  return cached;
 }
 
 export async function saveDepartments(departments: MasterDepartment[]): Promise<void> {
-  setLocalData('master_departments_sji_v4', departments);
+  setLocalData('master_departments', departments);
   try {
     await setDoc(doc(db, 'master_data', 'departments'), { list: departments });
   } catch (err: any) {
-    console.warn('Error saving departments to Firestore:', err.message);
+    console.warn('Error saving departments:', err.message);
   }
 }
 
 // ==========================================
-// 6. EXCEL EXPORT & IMPORT UTILITIES
+// 9. EXCEL IMPORT & EXPORT ENGINE
 // ==========================================
 
-export function exportCasesToExcel(cases: GrievanceCase[], format: 'xlsx' | 'csv' = 'xlsx') {
-  const exportData = cases.map((c) => ({
-    'Ticket ID': c.ticketId,
-    'Date Received': c.dateReceived,
-    'Instrument (Saluran)': c.channelReceived || 'Online',
-    'Employee Name': c.isAnonymous ? `${c.anonymousAlias || 'Protected Whistleblower'} (Anonymous)` : c.employeeName,
-    'Department': c.department,
-    'Complaint Category': c.complaintCategory,
-    'Priority': c.priority,
-    'Status': c.status,
-    'Assigned PIC': c.assignedPic,
-    'Progress (%)': c.progress,
-    'Due Date': c.dueDate,
-    'Closing Date': c.closingDate || '-',
-    'SLA Status': c.slaStatus,
-    'SLA Hours Left': c.slaHoursLeft,
-    'Last Update': c.lastUpdate,
-    'Description': c.description,
-    'Resolution Summary': c.resolutionSummary || '-',
-  }));
+// Helper: Convert Excel date (serial or string) to standard YYYY-MM-DD
+export function normalizeExcelDate(value: any): string {
+  if (!value) return new Date().toISOString().substring(0, 10);
 
-  const worksheet = XLSX.utils.json_to_sheet(exportData);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Grievance Cases');
+  // If number (Excel date serial e.g. 45678)
+  if (typeof value === 'number') {
+    const date = new Date(Math.round((value - 25569) * 86400 * 1000));
+    if (!isNaN(date.getTime())) {
+      return date.toISOString().substring(0, 10);
+    }
+  }
 
-  const fileName = `SJI_Grievances_${new Date().toISOString().substring(0, 10)}.${format}`;
-  XLSX.writeFile(workbook, fileName, { bookType: format });
+  const str = String(value).trim();
+  // If DD/MM/YYYY
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(str)) {
+    const [d, m, y] = str.split('/');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  // If DD-MM-YYYY
+  if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(str)) {
+    const [d, m, y] = str.split('-');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  // If YYYY-MM-DD
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(str)) {
+    const [y, m, d] = str.split('-');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  // Attempt standard Date parsing
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().substring(0, 10);
+  }
+
+  return new Date().toISOString().substring(0, 10);
 }
 
-export async function parseExcelImport(file: File): Promise<Partial<GrievanceCase>[]> {
+export interface ExcelImportResult {
+  validCases: Partial<GrievanceCase>[];
+  errors: string[];
+  duplicateCount: number;
+}
+
+export async function parseExcelImportAdvanced(
+  file: File,
+  existingCases: GrievanceCase[] = []
+): Promise<ExcelImportResult> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const rows: any[] = XLSX.utils.sheet_to_json(worksheet);
 
-        const parsedCases: Partial<GrievanceCase>[] = rawJson.map((row, idx) => {
-          const ticketId = row['Ticket ID'] || row['ticketId'] || `GRV-${new Date().getFullYear()}-${String(idx + 1).padStart(4, '0')}`;
-          const dateReceived = row['Date Received'] || row['dateReceived'] || new Date().toISOString().substring(0, 10);
-          const employeeName = row['Employee Name'] || row['employeeName'] || 'Pelapor Tidak Disebutkan';
-          const isAnonymous = Boolean(row['Is Anonymous'] || row['isAnonymous'] || employeeName.toLowerCase().includes('anon'));
-          const department = row['Department'] || row['department'] || 'HR';
-          const complaintCategory = row['Complaint Category'] || row['complaintCategory'] || 'Kebijakan';
-          const priority = (row['Priority'] || row['priority'] || 'Major') as any;
-          const status = (row['Status'] || row['status'] || 'Open') as any;
-          const assignedPic = row['Assigned PIC'] || row['assignedPic'] || 'Unassigned';
-          const dueDate = row['Due Date'] || row['dueDate'] || new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
-          const channelReceived = row['Instrument (Saluran)'] || row['channelReceived'] || 'Online';
-          const description = row['Description'] || row['description'] || row['Uraian Keluhan'] || 'Data diimpor dari file spreadsheet.';
+        const existingTicketIds = new Set(existingCases.map((c) => c.ticketId.trim().toUpperCase()));
+        const seenInFile = new Set<string>();
 
-          return {
+        const validCases: Partial<GrievanceCase>[] = [];
+        const errors: string[] = [];
+        let duplicateCount = 0;
+
+        rows.forEach((row, idx) => {
+          const rowNum = idx + 2; // header is row 1
+
+          // Find Ticket ID from multiple candidate column names
+          const rawTicketId =
+            row['Ticket ID'] ||
+            row['ticketId'] ||
+            row['ID Tiket'] ||
+            row['Nomor Tiket'] ||
+            row['No Tiket'] ||
+            row['No'] ||
+            `GRV-IMP-${String(idx + 1).padStart(4, '0')}`;
+
+          const ticketId = String(rawTicketId).trim().toUpperCase();
+
+          if (existingTicketIds.has(ticketId)) {
+            duplicateCount++;
+            errors.push(`Baris #${rowNum}: Ticket ID "${ticketId}" sudah ada di database sistem.`);
+            return;
+          }
+          if (seenInFile.has(ticketId)) {
+            duplicateCount++;
+            errors.push(`Baris #${rowNum}: Ticket ID "${ticketId}" duplikat dalam file spreadsheet.`);
+            return;
+          }
+          seenInFile.add(ticketId);
+
+          // Grievance Date / Tanggal Keluhan
+          const rawDateReceived =
+            row['Date Received'] ||
+            row['Tanggal Keluhan'] ||
+            row['Tanggal Diterima'] ||
+            row['Tanggal Masuk'] ||
+            row['Tanggal'] ||
+            row['dateReceived'];
+
+          const dateReceived = normalizeExcelDate(rawDateReceived);
+
+          // Employee Name
+          const employeeName =
+            row['Employee Name'] ||
+            row['Nama Karyawan'] ||
+            row['Nama Pelapor'] ||
+            row['Pelapor'] ||
+            row['employeeName'] ||
+            'Pelapor Terlindungi';
+
+          const isAnonymous =
+            Boolean(row['Is Anonymous'] || row['isAnonymous']) ||
+            String(employeeName).toLowerCase().includes('anon') ||
+            String(employeeName).toLowerCase().includes('rahasia');
+
+          // Department
+          const department =
+            row['Department'] ||
+            row['Departemen'] ||
+            row['Bagian'] ||
+            row['department'] ||
+            'HR';
+
+          // Category
+          const complaintCategory =
+            row['Complaint Category'] ||
+            row['Kategori'] ||
+            row['Kategori Keluhan'] ||
+            row['Jenis Keluhan'] ||
+            row['complaintCategory'] ||
+            'Kebijakan';
+
+          // Priority (Minor, Major, Critical)
+          let priority: PriorityLevel = 'Major';
+          const rawPriority = String(
+            row['Priority'] || row['Prioritas'] || row['Tingkat Prioritas'] || 'Major'
+          ).toLowerCase();
+
+          if (rawPriority.includes('crit') || rawPriority.includes('kritis')) priority = 'Critical';
+          else if (rawPriority.includes('min')) priority = 'Minor';
+          else priority = 'Major';
+
+          // Status: strictly 4 stages: Open, Investigation, Action Taken, Closed
+          let status: CaseStatus = 'Open';
+          const rawStatus = String(row['Status'] || row['status'] || 'Open').toLowerCase();
+          if (rawStatus.includes('clos') || rawStatus.includes('tutup') || rawStatus.includes('selesai')) {
+            status = 'Closed';
+          } else if (rawStatus.includes('action') || rawStatus.includes('tindakan')) {
+            status = 'Action Taken';
+          } else if (rawStatus.includes('invest') || rawStatus.includes('periksa')) {
+            status = 'Investigation';
+          } else {
+            status = 'Open';
+          }
+
+          // PIC
+          const assignedPic =
+            row['Assigned PIC'] ||
+            row['PIC'] ||
+            row['PIC Departemen'] ||
+            row['Penanggung Jawab'] ||
+            'Unassigned PIC';
+
+          // Due Date: calculate from dateReceived + SLA if not present or explicitly given
+          const rawDueDate = row['Due Date'] || row['Batas Waktu'] || row['Target Selesai'];
+          const dueDate = rawDueDate
+            ? normalizeExcelDate(rawDueDate)
+            : calculateDueDateFromGrievanceDate(dateReceived, priority);
+
+          // Channel
+          let channelReceived: GrievanceInstrument = 'Online';
+          const rawChan = String(row['Instrument (Saluran)'] || row['Saluran'] || row['Saluran Masuk'] || 'Online').toLowerCase();
+          if (rawChan.includes('box') || rawChan.includes('kotak')) channelReceived = 'Grievance Box';
+          else if (rawChan.includes('verb') || rawChan.includes('lisan')) channelReceived = 'Verbal';
+          else if (rawChan.includes('hot') || rawChan.includes('wa') || rawChan.includes('telepon')) channelReceived = 'Hotline';
+          else channelReceived = 'Online';
+
+          // Description
+          const description =
+            row['Description'] ||
+            row['Deskripsi'] ||
+            row['Uraian'] ||
+            row['Keluhan'] ||
+            row['Isi Keluhan'] ||
+            'Data keluhan diimpor dari file portal internal.';
+
+          validCases.push({
             ticketId,
             dateReceived,
-            employeeName,
+            employeeName: String(employeeName),
             isAnonymous,
-            anonymousAlias: isAnonymous ? `Whistleblower #${Math.floor(1000 + Math.random() * 9000)}` : undefined,
-            department,
-            complaintCategory,
+            anonymousAlias: isAnonymous ? `Whistleblower #${Math.floor(1000 + Math.random() * 9000)}` : null,
+            department: String(department),
+            complaintCategory: String(complaintCategory),
             priority,
             status,
-            assignedPic,
-            assignedPicId: 'usr-admin-01',
-            assignedInvestigator: '',
-            assignedInvestigatorId: '',
-            progress: status === 'Closed' ? 100 : 20,
+            assignedPic: String(assignedPic),
+            assignedPicId: 'usr-pic-auto',
+            progress: status === 'Closed' ? 100 : status === 'Action Taken' ? 75 : status === 'Investigation' ? 45 : 15,
             dueDate,
-            slaStatus: 'On Track',
-            slaHoursLeft: 72,
+            closingDate: status === 'Closed' ? dateReceived : null,
             channelReceived,
-            description,
-          };
+            description: String(description),
+          });
         });
 
-        resolve(parsedCases);
-      } catch (err) {
-        reject(err);
+        resolve({ validCases, errors, duplicateCount });
+      } catch (err: any) {
+        reject(new Error('Gagal memproses file spreadsheet: ' + err.message));
       }
     };
-    reader.onerror = (error) => reject(error);
+    reader.onerror = () => reject(new Error('Gagal membaca file'));
     reader.readAsArrayBuffer(file);
   });
+}
+
+// Backward compatibility alias
+export async function parseExcelImport(file: File): Promise<Partial<GrievanceCase>[]> {
+  const res = await parseExcelImportAdvanced(file);
+  return res.validCases;
+}
+
+export function exportCasesToExcel(cases: GrievanceCase[], format: 'xlsx' | 'csv' = 'xlsx') {
+  const exportData = cases.map((c) => ({
+    'Ticket ID': c.ticketId,
+    'Grievance Date (Tanggal Keluhan)': c.dateReceived,
+    'Saluran (Instrument)': c.channelReceived || 'Online',
+    'Nama Pelapor': c.isAnonymous ? `${c.anonymousAlias || 'Whistleblower'} (Protected)` : c.employeeName,
+    'Departemen': c.department,
+    'Kategori Keluhan': c.complaintCategory,
+    'Tingkat Prioritas': c.priority,
+    'Status Kasus': c.status,
+    'PIC Departemen': c.assignedPic || '-',
+    'Progress (%)': c.progress,
+    'Batas Waktu (Due Date)': c.dueDate,
+    'Tanggal Selesai (Closing Date)': c.closingDate || '-',
+    'Status SLA': c.slaStatus,
+    'Uraian Keluhan': c.description,
+    'Ringkasan Penyelesaian': c.resolutionSummary || '-',
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(exportData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Grievance Cases');
+
+  const fileName = `SJI_Grievance_Report_${new Date().toISOString().substring(0, 10)}.${format}`;
+  XLSX.writeFile(workbook, fileName, { bookType: format });
 }

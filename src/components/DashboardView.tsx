@@ -24,7 +24,7 @@ interface DashboardViewProps {
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavigateToCases }) => {
-  const { cases, stats, setIsNewCaseModalOpen, setIsImportModalOpen, handleExport } = useCases();
+  const { cases, stats, setIsNewCaseModalOpen, setIsImportModalOpen, handleExport, syncStatus, handleSyncOffline } = useCases();
   const { currentUser, canRegisterCase } = useAuth();
 
   // Urgent cases needing prompt action (Breached or Critical)
@@ -112,8 +112,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
       </div>
 
       {/* KPI Cards Grid */}
+      {/* Offline/Sync Error Notice for Administrator */}
+      {syncStatus.hasError && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start space-x-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                Pemberitahuan Sinkronisasi Cloud Firestore
+              </h3>
+              <p className="text-xs text-amber-800 mt-0.5">
+                {syncStatus.errorMessage || 'Terdapat data kasus lokal yang belum berhasil terkirim ke Cloud Firestore.'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              const res = await handleSyncOffline();
+              if (res.errors.length === 0) {
+                alert(`Berhasil menyinkronkan ${res.synced} kasus ke Cloud Firestore.`);
+              } else {
+                alert(`Gagal sinkronisasi: ${res.errors.join(', ')}`);
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition self-start sm:self-auto shrink-0"
+          >
+            Sinkronkan Ulang Sekarang
+          </button>
+        </div>
+      )}
+
+      {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Cases */}
+        {/* Total Active Cases (All cases except Closed) */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -124,9 +155,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
             </span>
           </div>
           <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-slate-900">{stats.total}</span>
+            <span className="text-2xl font-bold text-slate-900">{stats.activeCount}</span>
             <span className="text-xs text-slate-500 font-medium">
-              {stats.closed} Closed
+              {stats.closed} Closed ({stats.total} Total)
             </span>
           </div>
           <div className="mt-3 w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
@@ -160,7 +191,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
           </p>
         </div>
 
-        {/* SLA Compliance */}
+        {/* SLA Compliance (Rule D: No fake 100% when no data exists!) */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -171,21 +202,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
             </span>
           </div>
           <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-bold text-slate-900">{stats.complianceRate}%</span>
+            <span className="text-2xl font-bold text-slate-900">
+              {stats.hasCases ? `${stats.complianceRate}%` : '0%'}
+            </span>
             <span
               className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                stats.complianceRate >= 90
+                !stats.hasCases
+                  ? 'bg-slate-100 text-slate-600'
+                  : stats.complianceRate >= 90
                   ? 'bg-emerald-100 text-emerald-800'
                   : 'bg-rose-100 text-rose-800'
               }`}
             >
-              {stats.slaBreachedCount === 0 ? 'Optimal' : `${stats.slaBreachedCount} Overdue`}
+              {!stats.hasCases
+                ? 'Belum Ada Data'
+                : stats.activeBreached === 0
+                ? 'Optimal'
+                : `${stats.activeBreached} Overdue`}
             </span>
           </div>
           <div className="mt-3 w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
             <div
-              className={`h-1.5 rounded-full ${stats.complianceRate >= 90 ? 'bg-emerald-500' : 'bg-rose-500'}`}
-              style={{ width: `${stats.complianceRate}%` }}
+              className={`h-1.5 rounded-full ${
+                !stats.hasCases ? 'bg-slate-300' : stats.complianceRate >= 90 ? 'bg-emerald-500' : 'bg-rose-500'
+              }`}
+              style={{ width: `${stats.hasCases ? stats.complianceRate : 0}%` }}
             />
           </div>
         </div>
