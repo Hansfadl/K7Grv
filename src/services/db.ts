@@ -30,7 +30,6 @@ import {
   INITIAL_DEPARTMENTS,
 } from './mockData';
 import * as XLSX from 'xlsx';
-import { AutomationService } from './automation/AutomationService';
 
 // Local storage cache keys for instant initial paint & offline tolerance
 const STORAGE_PREFIX = 'sji_hr_v5_firestore_';
@@ -548,11 +547,6 @@ export async function createCase(
     details: `${existingCase ? 'Pembaruan otomatis (deduplikasi)' : 'Mendaftarkan'} keluhan baru #${prepared.ticketId} (${prepared.department} - ${prepared.complaintCategory}). Status: ${prepared.status}. Target Selesai: ${prepared.dueDate}.${firestoreFailed ? ' [TERCATAT SECARA LOKAL - PERLU SYNC]' : ' [SYNCED FIRESTORE]'}`,
   });
 
-  // Trigger Automation Engine for new case registration
-  AutomationService.onCaseCreated(prepared, user).catch((err) => {
-    console.warn('Automation onCaseCreated execution notice:', err);
-  });
-
   return prepared;
 }
 
@@ -623,11 +617,6 @@ export async function updateCaseRecord(
     caseId,
     ticketId: cleanPayload.ticketId,
     details: `Memperbarui data kasus: ${Object.keys(updates).join(', ')}. ${reason ? `Alasan: ${reason}.` : ''}${firestoreFailed ? ' [TERCATAT SECARA LOKAL - PERLU SYNC]' : ' [SYNCED FIRESTORE]'}`,
-  });
-
-  // Trigger Automation Engine for updates (PIC change, status change, priority escalation)
-  AutomationService.onCaseUpdated(existingCase, cleanPayload, user, reason).catch((err) => {
-    console.warn('Automation onCaseUpdated execution notice:', err);
   });
 }
 
