@@ -18,7 +18,6 @@ import { EvidenceView } from './components/EvidenceView';
 import { ReportsView } from './components/ReportsView';
 import { MasterDataView } from './components/MasterDataView';
 import { UserManagementView } from './components/UserManagementView';
-import { AutomationLogView } from './components/AutomationLogView';
 import { CaseDetailModal } from './components/CaseDetailModal';
 import { NewCaseModal } from './components/NewCaseModal';
 import { ExcelImportModal } from './components/ExcelImportModal';
@@ -116,10 +115,6 @@ const AppContent: React.FC = () => {
 
             {currentModule === 'user_management' && (
               <UserManagementView />
-            )}
-
-            {currentModule === 'automation_log' && (
-              <AutomationLogView />
             )}
           </div>
         </main>

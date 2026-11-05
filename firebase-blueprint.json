@@ -190,95 +190,6 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["type", "name", "active"]
-    },
-    "NotificationItem": {
-      "title": "NotificationItem",
-      "description": "User notification item delivered via Notification Center",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128 },
-        "recipientId": { "type": "string", "maxLength": 128 },
-        "recipientEmail": { "type": "string", "maxLength": 256 },
-        "roleTarget": { "type": "string", "maxLength": 64 },
-        "departmentTarget": { "type": "string", "maxLength": 128 },
-        "ticketId": { "type": "string", "maxLength": 64 },
-        "caseId": { "type": "string", "maxLength": 128 },
-        "category": { "type": "string", "maxLength": 128 },
-        "title": { "type": "string", "maxLength": 256 },
-        "message": { "type": "string", "maxLength": 1000 },
-        "isRead": { "type": "boolean" },
-        "createdAt": { "type": "string", "maxLength": 64 },
-        "readAt": { "type": "string", "maxLength": 64 },
-        "targetTab": { "type": "string", "maxLength": 64 },
-        "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] }
-      },
-      "required": ["recipientId", "category", "title", "message", "isRead", "createdAt", "priority"]
-    },
-    "AutomationLog": {
-      "title": "AutomationLog",
-      "description": "Execution and audit trace for automation triggers and notifications",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128 },
-        "automationId": { "type": "string", "maxLength": 128 },
-        "eventType": { "type": "string", "maxLength": 64 },
-        "ticketId": { "type": "string", "maxLength": 64 },
-        "caseId": { "type": "string", "maxLength": 128 },
-        "recipient": { "type": "string", "maxLength": 256 },
-        "recipientId": { "type": "string", "maxLength": 128 },
-        "triggerDate": { "type": "string", "maxLength": 64 },
-        "executionStatus": { "type": "string", "enum": ["Pending", "Processing", "Success", "Failed", "Skipped"] },
-        "deliveryStatus": { "type": "string", "maxLength": 64 },
-        "errorMessage": { "type": "string", "maxLength": 2000 },
-        "retryCount": { "type": "number" },
-        "idempotencyKey": { "type": "string", "maxLength": 256 },
-        "details": { "type": "string", "maxLength": 2000 },
-        "createdAt": { "type": "string", "maxLength": 64 }
-      },
-      "required": ["automationId", "eventType", "triggerDate", "executionStatus", "idempotencyKey"]
-    },
-    "AutomationConfig": {
-      "title": "AutomationConfig",
-      "description": "System-wide automation engine toggles and scheduling parameters",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128 },
-        "isEnabled": { "type": "boolean" },
-        "slaReminderHoursBeforeDue": { "type": "number" },
-        "checkIntervalMinutes": { "type": "number" },
-        "notifyOnNewCase": { "type": "boolean" },
-        "notifyOnPicChange": { "type": "boolean" },
-        "notifyOnStatusChange": { "type": "boolean" },
-        "notifyOnCritical": { "type": "boolean" },
-        "notifyOnOverdue": { "type": "boolean" },
-        "notifyOnActionPlanDue": { "type": "boolean" },
-        "notifyOnApproval": { "type": "boolean" },
-        "updatedAt": { "type": "string", "maxLength": 64 },
-        "updatedBy": { "type": "string", "maxLength": 128 }
-      },
-      "required": ["isEnabled", "slaReminderHoursBeforeDue", "updatedAt"]
-    },
-    "ApprovalRequest": {
-      "title": "ApprovalRequest",
-      "description": "Formal governance approval workflow item for case transitions and CAPA",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128 },
-        "caseId": { "type": "string", "maxLength": 128 },
-        "ticketId": { "type": "string", "maxLength": 64 },
-        "requestType": { "type": "string", "maxLength": 64 },
-        "requestedBy": { "type": "string", "maxLength": 128 },
-        "requestedById": { "type": "string", "maxLength": 128 },
-        "requestedRole": { "type": "string", "maxLength": 64 },
-        "approverRole": { "type": "string", "maxLength": 64 },
-        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected", "Revision Required"] },
-        "requestNotes": { "type": "string", "maxLength": 2000 },
-        "decisionNotes": { "type": "string", "maxLength": 2000 },
-        "decidedBy": { "type": "string", "maxLength": 128 },
-        "createdAt": { "type": "string", "maxLength": 64 },
-        "decidedAt": { "type": "string", "maxLength": 64 }
-      },
-      "required": ["caseId", "ticketId", "requestType", "requestedBy", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -321,22 +232,6 @@
     "/master_data/{dataId}": {
       "schema": "MasterData",
       "description": "Reference catalog for grievance categories, departments, and SLA configurations"
-    },
-    "/notifications/{notificationId}": {
-      "schema": "NotificationItem",
-      "description": "User notifications for case events, reminders, and alerts"
-    },
-    "/automation_logs/{logId}": {
-      "schema": "AutomationLog",
-      "description": "Automation engine execution records and audit traces"
-    },
-    "/automation_config/{configId}": {
-      "schema": "AutomationConfig",
-      "description": "Configurable engine switches and escalation settings"
-    },
-    "/approvals/{approvalId}": {
-      "schema": "ApprovalRequest",
-      "description": "Governance approval requests and decisions"
     }
   }
 }
