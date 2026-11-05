@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useCases } from '../context/CaseContext';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -17,8 +17,16 @@ import {
   Save,
   X,
   Eye,
-  RefreshCw
+  RefreshCw,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
+import { useToast } from '../context/ToastContext';
 import { GrievanceCase, ActionPlan, CapaProgressStatus } from '../types';
 import {
   getCaseActionPlans,
@@ -34,11 +42,20 @@ interface ActionPlanViewProps {
 export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) => {
   const { cases, handleUpdateCase } = useCases();
   const { currentUser } = useAuth();
+  const toast = useToast();
 
   // Selected filter states
   const [selectedCaseId, setSelectedCaseId] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Progress' | 'Completed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Sorting & Pagination State
+  type CapaSortField = 'ticketId' | 'description' | 'responsiblePic' | 'targetDate' | 'progressStatus' | 'completionDate';
+  type SortDirection = 'asc' | 'desc';
+  const [sortField, setSortField] = useState<CapaSortField>('targetDate');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
 
   // Plans collection
   const [allPlans, setAllPlans] = useState<ActionPlan[]>([]);
@@ -165,6 +182,7 @@ export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) =>
           },
           currentUser
         );
+        toast.success(`Data CAPA #${form.ticketId} berhasil diperbarui.`);
       } else {
         // Add new CAPA
         await addCaseActionPlan(
@@ -182,13 +200,16 @@ export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) =>
           },
           currentUser
         );
+        toast.success(`Rencana perbaikan (CAPA) #${form.ticketId} berhasil ditambahkan.`);
       }
 
       await loadAllPlans();
       setIsModalOpen(false);
     } catch (err: any) {
       console.error('Error saving CAPA:', err);
-      setFormError('Gagal menyimpan CAPA: ' + err.message);
+      const msg = 'Gagal menyimpan CAPA: ' + (err.message || '');
+      setFormError(msg);
+      toast.error(msg);
     } finally {
       setIsSaving(false);
     }
@@ -214,8 +235,10 @@ export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) =>
           p.id === plan.id ? { ...p, progressStatus: newStatus, completionDate } : p
         )
       );
-    } catch (err) {
+      toast.success(`Status CAPA #${plan.ticketId} diubah ke ${newStatus}.`);
+    } catch (err: any) {
       console.warn('Error toggling CAPA status:', err);
+      toast.error('Gagal memperbarui status CAPA: ' + err.message);
     }
   };
 
@@ -227,24 +250,100 @@ export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) =>
     try {
       await deleteCaseActionPlan(plan.caseId, plan.id, currentUser);
       setAllPlans((prev) => prev.filter((p) => p.id !== plan.id));
-    } catch (err) {
+      toast.success(`Rencana perbaikan #${plan.ticketId} berhasil dihapus.`);
+    } catch (err: any) {
       console.warn('Error deleting CAPA:', err);
+      toast.error('Gagal menghapus CAPA: ' + err.message);
+    }
+  };
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedCaseId, statusFilter, searchQuery, pageSize]);
+
+  const handleSort = (field: CapaSortField) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
     }
   };
 
   // Filtered plans
-  const filteredPlans = allPlans.filter((plan) => {
-    if (selectedCaseId !== 'all' && plan.caseId !== selectedCaseId) return false;
-    if (statusFilter !== 'all' && plan.progressStatus !== statusFilter) return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTicket = plan.ticketId?.toLowerCase().includes(q);
-      const matchDesc = plan.description?.toLowerCase().includes(q);
-      const matchPic = plan.responsiblePic?.toLowerCase().includes(q);
-      if (!matchTicket && !matchDesc && !matchPic) return false;
-    }
-    return true;
-  });
+  const filteredPlans = useMemo(() => {
+    return allPlans.filter((plan) => {
+      if (selectedCaseId !== 'all' && plan.caseId !== selectedCaseId) return false;
+      if (statusFilter !== 'all' && plan.progressStatus !== statusFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchTicket = plan.ticketId?.toLowerCase().includes(q);
+        const matchDesc = plan.description?.toLowerCase().includes(q);
+        const matchPic = plan.responsiblePic?.toLowerCase().includes(q);
+        if (!matchTicket && !matchDesc && !matchPic) return false;
+      }
+      return true;
+    });
+  }, [allPlans, selectedCaseId, statusFilter, searchQuery]);
+
+  const sortedPlans = useMemo(() => {
+    return [...filteredPlans].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'ticketId':
+          cmp = (a.ticketId || '').localeCompare(b.ticketId || '');
+          break;
+        case 'description':
+          cmp = (a.description || '').localeCompare(b.description || '');
+          break;
+        case 'responsiblePic':
+          cmp = (a.responsiblePic || '').localeCompare(b.responsiblePic || '');
+          break;
+        case 'targetDate':
+          cmp = (a.targetDate || '').localeCompare(b.targetDate || '');
+          break;
+        case 'progressStatus':
+          cmp = (a.progressStatus || '').localeCompare(b.progressStatus || '');
+          break;
+        case 'completionDate':
+          cmp = (a.completionDate || '').localeCompare(b.completionDate || '');
+          break;
+        default:
+          cmp = 0;
+      }
+      return sortDirection === 'asc' ? cmp : -cmp;
+    });
+  }, [filteredPlans, sortField, sortDirection]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedPlans.length / pageSize));
+  const paginatedPlans = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return sortedPlans.slice(start, start + pageSize);
+  }, [sortedPlans, currentPage, pageSize]);
+
+  const renderSortHeader = (label: string, field: CapaSortField, alignRight = false) => {
+    const isActive = sortField === field;
+    return (
+      <th
+        className={`px-4 py-3 cursor-pointer select-none transition hover:bg-slate-100 ${alignRight ? 'text-right' : 'text-left'}`}
+        onClick={() => handleSort(field)}
+        title={`Urutkan berdasarkan ${label}`}
+      >
+        <div className={`inline-flex items-center space-x-1 ${alignRight ? 'justify-end' : 'justify-start'}`}>
+          <span>{label}</span>
+          {isActive ? (
+            sortDirection === 'asc' ? (
+              <ArrowUp className="w-3 h-3 text-blue-600 shrink-0" />
+            ) : (
+              <ArrowDown className="w-3 h-3 text-blue-600 shrink-0" />
+            )
+          ) : (
+            <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0 opacity-40 hover:opacity-100" />
+          )}
+        </div>
+      </th>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -345,7 +444,7 @@ export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) =>
 
       {/* Plans List Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-        {filteredPlans.length === 0 ? (
+        {paginatedPlans.length === 0 ? (
           <div className="p-12 text-center text-slate-400 text-xs">
             {isLoading ? 'Memuat data CAPA...' : 'Belum ada data rencana aksi (CAPA) yang sesuai dengan filter.'}
           </div>
@@ -354,19 +453,19 @@ export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) =>
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-600 uppercase font-semibold border-b border-slate-200">
                 <tr>
-                  <th className="px-4 py-3">Ticket ID</th>
-                  <th className="px-4 py-3">Action Plan Description</th>
-                  <th className="px-4 py-3">Responsible PIC</th>
-                  <th className="px-4 py-3">Target Date</th>
+                  {renderSortHeader('Ticket ID', 'ticketId')}
+                  {renderSortHeader('Action Plan Description', 'description')}
+                  {renderSortHeader('Responsible PIC', 'responsiblePic')}
+                  {renderSortHeader('Target Date', 'targetDate')}
                   <th className="px-4 py-3">Action Taken</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Completion Date</th>
+                  {renderSortHeader('Status', 'progressStatus')}
+                  {renderSortHeader('Completion Date', 'completionDate')}
                   <th className="px-4 py-3">Notes / Revisi</th>
                   <th className="px-4 py-3 text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredPlans.map((plan) => {
+                {paginatedPlans.map((plan: ActionPlan) => {
                   const isCompleted = plan.progressStatus === 'Completed';
                   const associatedCase = cases.find((c) => c.ticketId === plan.ticketId || c.id === plan.caseId);
 
@@ -490,6 +589,107 @@ export const ActionPlanView: React.FC<ActionPlanViewProps> = ({ onOpenCase }) =>
             </table>
           </div>
         )}
+
+        {/* Responsive Pagination Toolbar */}
+        <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+          <div className="flex items-center space-x-3">
+            <span>
+              Menampilkan{' '}
+              <strong className="text-slate-800">
+                {sortedPlans.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}
+              </strong>
+              –
+              <strong className="text-slate-800">
+                {Math.min(currentPage * pageSize, sortedPlans.length)}
+              </strong>{' '}
+              dari <strong className="text-slate-800">{sortedPlans.length}</strong> rencana aksi
+            </span>
+
+            <div className="flex items-center space-x-1.5">
+              <span className="text-[11px] text-slate-500 font-medium">Baris:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="px-2 py-1 text-xs bg-white border border-slate-300 rounded-md font-medium focus:ring-1 focus:ring-blue-500 outline-none"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-1">
+            <button
+              type="button"
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Pertama"
+            >
+              <ChevronsLeft className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Sebelumnya"
+            >
+              <ChevronLeft className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+
+            {/* Page number buttons */}
+            <div className="flex items-center space-x-1 px-1">
+              {Array.from({ length: totalPages }, (_, idx) => idx + 1)
+                .filter((page) => {
+                  if (totalPages <= 7) return true;
+                  if (page === 1 || page === totalPages) return true;
+                  return Math.abs(page - currentPage) <= 1;
+                })
+                .map((page, index, arr) => {
+                  const prev = arr[index - 1];
+                  const hasGap = prev && page - prev > 1;
+                  return (
+                    <React.Fragment key={page}>
+                      {hasGap && <span className="px-1 text-slate-400">...</span>}
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(page)}
+                        className={`min-w-[28px] h-7 px-1.5 text-xs font-semibold rounded-md transition ${
+                          currentPage === page
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    </React.Fragment>
+                  );
+                })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages || totalPages === 0}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Berikutnya"
+            >
+              <ChevronRight className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages || totalPages === 0}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Terakhir"
+            >
+              <ChevronsRight className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Working Add / Edit Modal (Revisi Data CAPA) */}

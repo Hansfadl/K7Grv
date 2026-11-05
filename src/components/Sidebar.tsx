@@ -19,7 +19,8 @@ import {
   ChevronRight,
   PanelLeftClose,
   BarChart2,
-  PieChart
+  PieChart,
+  Cpu
 } from 'lucide-react';
 
 export type AppModule =
@@ -36,7 +37,8 @@ export type AppModule =
   | 'annual_report'
   | 'custom_report'
   | 'master_data'
-  | 'user_management';
+  | 'user_management'
+  | 'automation_log';
 
 interface SidebarProps {
   currentModule: AppModule;
@@ -98,50 +100,65 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'custom_report' as AppModule, label: 'Custom Date Range', icon: PieChart },
   ];
 
+  const handleItemClick = (mod: AppModule) => {
+    onSelectModule(mod);
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      onToggle();
+    }
+  };
+
   return (
-    <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 text-slate-300 select-none min-h-[calc(100vh-4rem)] transition-all duration-200">
-      {/* Session Scope Banner */}
-      <div className="p-3 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
-        <div className="flex items-center space-x-2 text-xs truncate">
-          <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-          <div className="truncate">
-            <span className="text-slate-400 block text-[9px] uppercase font-bold tracking-wider">
-              Tingkat Akses
-            </span>
-            <span className="text-white font-semibold capitalize text-xs">
-              {currentUser?.role.replace('_', ' ')}
-            </span>
+    <>
+      {/* Mobile Drawer Backdrop */}
+      <div
+        className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-30 lg:hidden animate-in fade-in duration-150"
+        onClick={onToggle}
+        aria-hidden="true"
+      />
+
+      <aside className="fixed inset-y-0 left-0 z-40 lg:static lg:z-auto w-64 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0 text-slate-300 select-none min-h-[calc(100vh-4rem)] transition-all duration-200 shadow-2xl lg:shadow-none animate-in slide-in-from-left duration-200">
+        {/* Session Scope Banner */}
+        <div className="p-3 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
+          <div className="flex items-center space-x-2 text-xs truncate">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <div className="truncate">
+              <span className="text-slate-400 block text-[9px] uppercase font-bold tracking-wider">
+                Tingkat Akses
+              </span>
+              <span className="text-white font-semibold capitalize text-xs">
+                {currentUser?.role.replace('_', ' ')}
+              </span>
+            </div>
           </div>
-        </div>
-        <button
-          onClick={onToggle}
-          title="Tutup Menu Sidebar"
-          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800"
-        >
-          <PanelLeftClose className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Navigation List */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {/* Core Case Management Flow */}
-        <div className="pb-1 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-          Workflow Modul
+          <button
+            onClick={onToggle}
+            title="Tutup Menu Sidebar"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
         </div>
 
-        {coreModules.map((item) => {
-          const Icon = item.icon;
-          const isActive = currentModule === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onSelectModule(item.id)}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition group ${
-                isActive
-                  ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                  : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
-              }`}
-            >
+        {/* Navigation List */}
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+          {/* Core Case Management Flow */}
+          <div className="pb-1 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            Workflow Modul
+          </div>
+
+          {coreModules.map((item) => {
+            const Icon = item.icon;
+            const isActive = currentModule === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => handleItemClick(item.id)}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition group focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  isActive
+                    ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                    : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                }`}
+              >
               <div className="flex items-center space-x-2.5">
                 <Icon
                   className={`w-4 h-4 transition ${
@@ -182,7 +199,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 return (
                   <button
                     key={item.id}
-                    onClick={() => onSelectModule(item.id)}
+                    onClick={() => handleItemClick(item.id)}
                     className={`w-full flex items-center space-x-2.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                       isActive
                         ? 'bg-blue-600 text-white font-semibold'
@@ -214,7 +231,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="space-y-1 mt-1 pl-1">
                 {canManageMasterData && (
                   <button
-                    onClick={() => onSelectModule('master_data')}
+                    onClick={() => handleItemClick('master_data')}
                     className={`w-full flex items-center space-x-2.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                       currentModule === 'master_data'
                         ? 'bg-blue-600 text-white font-semibold'
@@ -227,7 +244,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 )}
                 {canManageUsers && (
                   <button
-                    onClick={() => onSelectModule('user_management')}
+                    onClick={() => handleItemClick('user_management')}
                     className={`w-full flex items-center space-x-2.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                       currentModule === 'user_management'
                         ? 'bg-blue-600 text-white font-semibold'
@@ -236,6 +253,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <Users className="w-3.5 h-3.5 text-slate-400" />
                     <span>User Management</span>
+                  </button>
+                )}
+                {(canManageUsers || currentUser?.role === 'hr_admin' || currentUser?.role === 'hr_lead') && (
+                  <button
+                    onClick={() => handleItemClick('automation_log')}
+                    className={`w-full flex items-center space-x-2.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                      currentModule === 'automation_log'
+                        ? 'bg-blue-600 text-white font-semibold'
+                        : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                    }`}
+                  >
+                    <Cpu className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Automation Log</span>
                   </button>
                 )}
               </div>
@@ -250,5 +280,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <span>SJI Grievance &amp; Compliance Portal</span>
       </div>
     </aside>
+  </>
   );
 };

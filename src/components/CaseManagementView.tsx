@@ -23,8 +23,16 @@ import {
   AlertTriangle,
   X,
   Edit3,
-  Calendar
+  Calendar,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
+import { useToast } from '../context/ToastContext';
 
 interface CaseManagementViewProps {
   onOpenCase: (c: GrievanceCase) => void;
@@ -48,6 +56,7 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
   } = useCases();
 
   const { currentUser, canRegisterCase, canDeleteCase, confidentialMode } = useAuth();
+  const toast = useToast();
 
   // Filters State
   const [searchQuery, setSearchQuery] = useState('');
@@ -58,6 +67,25 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
   const [instrumentFilter, setInstrumentFilter] = useState('all');
   const [startDateFilter, setStartDateFilter] = useState('');
   const [endDateFilter, setEndDateFilter] = useState('');
+
+  // Sorting & Pagination State
+  type SortField =
+    | 'ticketId'
+    | 'dateReceived'
+    | 'employeeName'
+    | 'department'
+    | 'complaintCategory'
+    | 'priority'
+    | 'status'
+    | 'assignedPic'
+    | 'dueDate'
+    | 'slaStatus';
+  type SortDirection = 'asc' | 'desc';
+
+  const [sortField, setSortField] = useState<SortField>('dateReceived');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
 
   // Edit Case Modal State
   const [caseToEdit, setCaseToEdit] = useState<GrievanceCase | null>(null);
@@ -78,6 +106,32 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
     setInstrumentFilter('all');
     setStartDateFilter('');
     setEndDateFilter('');
+    setCurrentPage(1);
+    toast.info('Filter direktori berhasil direset.');
+  };
+
+  // Reset pagination when search or filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    searchQuery,
+    statusFilter,
+    priorityFilter,
+    departmentFilter,
+    categoryFilter,
+    instrumentFilter,
+    startDateFilter,
+    endDateFilter,
+    pageSize,
+  ]);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
   };
 
   // Comprehensive multi-criteria filtering
@@ -132,29 +186,118 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
     endDateFilter,
   ]);
 
+  // Priority weight & status mapping for clean sorting
+  const PRIORITY_WEIGHTS: Record<string, number> = {
+    Critical: 3,
+    Major: 2,
+    Minor: 1,
+  };
+
+  const STATUS_WEIGHTS: Record<string, number> = {
+    Open: 1,
+    Investigation: 2,
+    'Action Taken': 3,
+    Closed: 4,
+  };
+
+  const sortedCases = useMemo(() => {
+    return [...filteredCases].sort((a, b) => {
+      let comparison = 0;
+      switch (sortField) {
+        case 'ticketId':
+          comparison = a.ticketId.localeCompare(b.ticketId);
+          break;
+        case 'dateReceived':
+          comparison = a.dateReceived.localeCompare(b.dateReceived);
+          break;
+        case 'employeeName':
+          comparison = (a.employeeName || '').localeCompare(b.employeeName || '');
+          break;
+        case 'department':
+          comparison = a.department.localeCompare(b.department);
+          break;
+        case 'complaintCategory':
+          comparison = a.complaintCategory.localeCompare(b.complaintCategory);
+          break;
+        case 'priority':
+          comparison = (PRIORITY_WEIGHTS[a.priority] || 0) - (PRIORITY_WEIGHTS[b.priority] || 0);
+          break;
+        case 'status':
+          comparison = (STATUS_WEIGHTS[a.status] || 0) - (STATUS_WEIGHTS[b.status] || 0);
+          break;
+        case 'assignedPic':
+          comparison = (a.assignedPic || '').localeCompare(b.assignedPic || '');
+          break;
+        case 'dueDate':
+          comparison = (a.dueDate || '').localeCompare(b.dueDate || '');
+          break;
+        case 'slaStatus':
+          comparison = (a.slaHoursLeft ?? 9999) - (b.slaHoursLeft ?? 9999);
+          break;
+        default:
+          comparison = 0;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [filteredCases, sortField, sortDirection]);
+
+  // Paginated records
+  const totalPages = Math.max(1, Math.ceil(sortedCases.length / pageSize));
+  const paginatedCases = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return sortedCases.slice(start, start + pageSize);
+  }, [sortedCases, currentPage, pageSize]);
+
   const confirmDelete = async () => {
     if (!caseToDelete) return;
     setIsDeleting(true);
     setDeleteError(null);
     try {
       await handleDeleteCase(caseToDelete.id, deleteReason.trim() || 'Salah input data keluhan');
+      toast.success(`Kasus #${caseToDelete.ticketId} berhasil dihapus permanen dari sistem.`);
       setCaseToDelete(null);
       setDeleteReason('Salah input data keluhan');
     } catch (err: any) {
-      setDeleteError(err.message || 'Gagal menghapus data keluhan.');
+      const msg = err.message || 'Gagal menghapus data keluhan.';
+      setDeleteError(msg);
+      toast.error(msg);
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const onExportWithToast = (format: 'xlsx' | 'csv') => {
+    try {
+      handleExport(format);
+      toast.success(`Data direktori (${filteredCases.length} kasus) berhasil diekspor ke ${format.toUpperCase()}.`);
+    } catch (err: any) {
+      toast.error('Gagal mengekspor file: ' + err.message);
     }
   };
 
   const getPriorityBadge = (priority: string) => {
     switch (priority) {
       case 'Critical':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">Critical (72h)</span>;
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+            <AlertTriangle className="w-3 h-3 mr-1 text-rose-600 shrink-0" />
+            Critical (72h)
+          </span>
+        );
       case 'Major':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">Major (7 Hari)</span>;
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+            <Clock className="w-3 h-3 mr-1 text-amber-600 shrink-0" />
+            Major (7 Hari)
+          </span>
+        );
       case 'Minor':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">Minor (14 Hari)</span>;
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+            <CheckCircle className="w-3 h-3 mr-1 text-slate-500 shrink-0" />
+            Minor (14 Hari)
+          </span>
+        );
       default:
         return <span>{priority}</span>;
     }
@@ -163,13 +306,33 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'Open':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">1. Open</span>;
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+            <AlertCircle className="w-3 h-3 mr-1 text-blue-600 shrink-0" />
+            1. Open
+          </span>
+        );
       case 'Investigation':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">2. Investigation</span>;
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+            <Search className="w-3 h-3 mr-1 text-amber-600 shrink-0" />
+            2. Investigation
+          </span>
+        );
       case 'Action Taken':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">3. Action Taken</span>;
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+            <Clock className="w-3 h-3 mr-1 text-indigo-600 shrink-0" />
+            3. Action Taken
+          </span>
+        );
       case 'Closed':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">4. Closed</span>;
+        return (
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+            <CheckCircle className="w-3 h-3 mr-1 text-emerald-600 shrink-0" />
+            4. Closed
+          </span>
+        );
       default:
         return <span>{status}</span>;
     }
@@ -204,6 +367,30 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
       <span className="inline-flex items-center text-[10px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
         On Track ({c.slaHoursLeft}h)
       </span>
+    );
+  };
+
+  const renderSortHeader = (label: string, field: SortField, alignRight = false) => {
+    const isActive = sortField === field;
+    return (
+      <th
+        className={`py-3 px-3 cursor-pointer select-none transition hover:bg-slate-800 ${alignRight ? 'text-right' : 'text-left'}`}
+        onClick={() => handleSort(field)}
+        title={`Urutkan berdasarkan ${label}`}
+      >
+        <div className={`inline-flex items-center space-x-1 ${alignRight ? 'justify-end' : 'justify-start'}`}>
+          <span>{label}</span>
+          {isActive ? (
+            sortDirection === 'asc' ? (
+              <ArrowUp className="w-3 h-3 text-blue-400 shrink-0" />
+            ) : (
+              <ArrowDown className="w-3 h-3 text-blue-400 shrink-0" />
+            )
+          ) : (
+            <ArrowUpDown className="w-3 h-3 text-slate-400/60 shrink-0 opacity-40 hover:opacity-100" />
+          )}
+        </div>
+      </th>
     );
   };
 
@@ -247,7 +434,7 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
 
             <div className="flex items-center space-x-1">
               <button
-                onClick={() => handleExport('xlsx')}
+                onClick={() => onExportWithToast('xlsx')}
                 className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition"
                 title="Export filtered records to Excel"
               >
@@ -255,7 +442,7 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
                 <span>Export (.xlsx)</span>
               </button>
               <button
-                onClick={() => handleExport('csv')}
+                onClick={() => onExportWithToast('csv')}
                 className="inline-flex items-center px-2 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium transition"
                 title="Export as CSV"
               >
@@ -415,21 +602,21 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-900 text-white uppercase tracking-wider text-[10px] font-semibold">
-                <th className="py-3 px-3">Ticket ID</th>
-                <th className="py-3 px-3">Tgl Keluhan</th>
-                <th className="py-3 px-3">Pelapor</th>
-                <th className="py-3 px-3">Departemen</th>
-                <th className="py-3 px-3">Kategori</th>
-                <th className="py-3 px-3">Prioritas</th>
-                <th className="py-3 px-3">Status</th>
-                <th className="py-3 px-3">PIC</th>
-                <th className="py-3 px-3">Batas Waktu (Due Date)</th>
-                <th className="py-3 px-3">SLA Status</th>
+                {renderSortHeader('Ticket ID', 'ticketId')}
+                {renderSortHeader('Tgl Keluhan', 'dateReceived')}
+                {renderSortHeader('Pelapor', 'employeeName')}
+                {renderSortHeader('Departemen', 'department')}
+                {renderSortHeader('Kategori', 'complaintCategory')}
+                {renderSortHeader('Prioritas', 'priority')}
+                {renderSortHeader('Status', 'status')}
+                {renderSortHeader('PIC', 'assignedPic')}
+                {renderSortHeader('Batas Waktu (Due Date)', 'dueDate')}
+                {renderSortHeader('SLA Status', 'slaStatus')}
                 <th className="py-3 px-3 text-right">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredCases.length === 0 ? (
+              {paginatedCases.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="py-12 text-center text-slate-400">
                     <p className="text-sm font-semibold">Tidak ada data keluhan yang sesuai filter.</p>
@@ -439,7 +626,7 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
                   </td>
                 </tr>
               ) : (
-                filteredCases.map((c) => (
+                paginatedCases.map((c) => (
                   <tr
                     key={c.id}
                     onClick={() => onOpenCase(c)}
@@ -568,6 +755,107 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Responsive Pagination Toolbar */}
+        <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+          <div className="flex items-center space-x-3">
+            <span>
+              Menampilkan{' '}
+              <strong className="text-slate-800">
+                {sortedCases.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}
+              </strong>
+              –
+              <strong className="text-slate-800">
+                {Math.min(currentPage * pageSize, sortedCases.length)}
+              </strong>{' '}
+              dari <strong className="text-slate-800">{sortedCases.length}</strong> kasus (Total: {cases.length})
+            </span>
+
+            <div className="flex items-center space-x-1.5">
+              <span className="text-[11px] text-slate-500 font-medium">Baris:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="px-2 py-1 text-xs bg-white border border-slate-300 rounded-md font-medium focus:ring-1 focus:ring-blue-500 outline-none"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-1">
+            <button
+              type="button"
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Pertama"
+            >
+              <ChevronsLeft className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Sebelumnya"
+            >
+              <ChevronLeft className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+
+            {/* Page number buttons */}
+            <div className="flex items-center space-x-1 px-1">
+              {Array.from({ length: totalPages }, (_, idx) => idx + 1)
+                .filter((page) => {
+                  if (totalPages <= 7) return true;
+                  if (page === 1 || page === totalPages) return true;
+                  return Math.abs(page - currentPage) <= 1;
+                })
+                .map((page, index, arr) => {
+                  const prev = arr[index - 1];
+                  const hasGap = prev && page - prev > 1;
+                  return (
+                    <React.Fragment key={page}>
+                      {hasGap && <span className="px-1 text-slate-400">...</span>}
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(page)}
+                        className={`min-w-[28px] h-7 px-1.5 text-xs font-semibold rounded-md transition ${
+                          currentPage === page
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    </React.Fragment>
+                  );
+                })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages || totalPages === 0}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Berikutnya"
+            >
+              <ChevronRight className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages || totalPages === 0}
+              className="p-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              title="Halaman Terakhir"
+            >
+              <ChevronsRight className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+          </div>
         </div>
       </div>
 

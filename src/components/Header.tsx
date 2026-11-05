@@ -13,8 +13,11 @@ import {
   AlertTriangle,
   Menu,
   PanelLeftClose,
-  PanelLeft
+  PanelLeft,
+  Search
 } from 'lucide-react';
+import { NotificationCenter } from './NotificationCenter';
+import { GrievanceCase } from '../types';
 
 interface HeaderProps {
   isSidebarOpen?: boolean;
@@ -30,8 +33,24 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
     canRegisterCase,
   } = useAuth();
 
-  const { setIsNewCaseModalOpen, setIsImportModalOpen, stats } = useCases();
+  const { cases, openCaseDetail, setIsNewCaseModalOpen, setIsImportModalOpen, stats } = useCases();
   const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [quickSearch, setQuickSearch] = useState('');
+  const [isQuickSearchFocused, setIsQuickSearchFocused] = useState(false);
+
+  const searchResults = quickSearch.trim()
+    ? cases
+        .filter((c) => {
+          const q = quickSearch.toLowerCase();
+          return (
+            c.ticketId.toLowerCase().includes(q) ||
+            c.department.toLowerCase().includes(q) ||
+            c.complaintCategory.toLowerCase().includes(q) ||
+            (!c.isAnonymous && c.employeeName.toLowerCase().includes(q))
+          );
+        })
+        .slice(0, 5)
+    : [];
 
   const getRoleBadge = (role: string) => {
     switch (role) {
@@ -72,9 +91,9 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
                 className="h-8 w-auto object-contain"
               />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center space-x-2">
-                <h1 className="font-bold text-sm sm:text-base tracking-tight text-white uppercase">
+                <h1 className="font-bold text-xs sm:text-base tracking-tight text-white uppercase truncate max-w-[130px] sm:max-w-none">
                   HR Grievance Management System
                 </h1>
                 <span className="hidden md:inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
@@ -82,7 +101,7 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
                   RESTRICTED PORTAL
                 </span>
               </div>
-              <p className="text-xs text-slate-400 flex items-center">
+              <p className="text-[11px] text-slate-400 hidden sm:flex items-center">
                 <span className="font-medium text-slate-300">PT Shoenary Javanesia Inc.</span>
                 <span className="mx-1.5 text-slate-600">•</span>
                 <span>Authorized HR Operations &amp; PIC Workspace</span>
@@ -95,8 +114,53 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
             </div>
           </div>
 
+          {/* Global Quick Search (Desktop & Tablet) */}
+          <div className="hidden xl:block relative w-64">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                value={quickSearch}
+                onChange={(e) => setQuickSearch(e.target.value)}
+                onFocus={() => setIsQuickSearchFocused(true)}
+                onBlur={() => setTimeout(() => setIsQuickSearchFocused(false), 200)}
+                placeholder="Cari tiket cepat (e.g. GRV-)..."
+                className="w-full bg-slate-800/90 text-white placeholder-slate-400 pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
+              />
+            </div>
+
+            {/* Quick search floating results */}
+            {isQuickSearchFocused && searchResults.length > 0 && (
+              <div className="absolute left-0 right-0 mt-1.5 bg-white text-slate-900 rounded-xl shadow-2xl border border-slate-200 overflow-hidden z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Hasil Pencarian Cepat
+                </div>
+                <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto">
+                  {searchResults.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onMouseDown={() => {
+                        openCaseDetail(c, 'overview');
+                        setQuickSearch('');
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-blue-50 transition flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <span className="font-mono font-bold text-blue-700">#{c.ticketId}</span>
+                        <span className="ml-2 text-slate-700 truncate">{c.complaintCategory}</span>
+                        <div className="text-[10px] text-slate-400">{c.department} • {c.status}</div>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">{c.dueDate}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Action Tools & Session Controls */}
-          <div className="flex items-center space-x-2 sm:space-x-4">
+          <div className="flex items-center space-x-1 sm:space-x-3 shrink-0">
             {/* Urgent SLA Alert Pill */}
             {stats.slaBreachedCount > 0 && (
               <div className="hidden lg:flex items-center px-2.5 py-1 rounded bg-rose-950/80 border border-rose-800 text-rose-300 text-xs font-medium animate-pulse">
@@ -109,7 +173,7 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
             <button
               onClick={toggleConfidentialMode}
               title={confidentialMode ? 'Identitas pelapor rahasia sedang disamarkan' : 'Klik untuk menyamarkan identitas pelapor'}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+              className={`flex items-center space-x-1 px-2 py-1 sm:px-2.5 sm:py-1 rounded-md text-xs font-medium border transition-colors ${
                 confidentialMode
                   ? 'bg-slate-800 text-emerald-300 border-slate-700 hover:bg-slate-700'
                   : 'bg-rose-950 text-rose-300 border-rose-800 hover:bg-rose-900'
@@ -119,7 +183,7 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
                 <>
                   <ShieldAlert className="w-3.5 h-3.5 text-emerald-400" />
                   <span className="hidden sm:inline">Anonymity Mask: Aktif</span>
-                  <EyeOff className="w-3 h-3 text-slate-400" />
+                  <EyeOff className="w-3 h-3 text-slate-400 hidden sm:inline" />
                 </>
               ) : (
                 <>
@@ -149,6 +213,9 @@ export const Header: React.FC<HeaderProps> = ({ isSidebarOpen = true, onToggleSi
                 </button>
               </div>
             )}
+
+            {/* Notification Center */}
+            <NotificationCenter />
 
             {/* User Profile & Secure Sign Out Dropdown */}
             <div className="relative">
