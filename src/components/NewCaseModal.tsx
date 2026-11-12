@@ -5,12 +5,10 @@ import { PriorityLevel, GrievanceCase, MasterCategory, MasterDepartment, Grievan
 import { INITIAL_CATEGORIES, INITIAL_DEPARTMENTS } from '../services/mockData';
 import { getCategories, getDepartments, calculateDueDateFromGrievanceDate } from '../services/db';
 import { X, ShieldCheck, AlertCircle, Building2, User, Clock, FileText } from 'lucide-react';
-import { useToast } from '../context/ToastContext';
 
 export const NewCaseModal: React.FC = () => {
   const { isNewCaseModalOpen, setIsNewCaseModalOpen, handleCreateCase, cases } = useCases();
   const { currentUser } = useAuth();
-  const toast = useToast();
   const [categories, setCategories] = useState<MasterCategory[]>(INITIAL_CATEGORIES);
   const [departments, setDepartments] = useState<MasterDepartment[]>(INITIAL_DEPARTMENTS);
 
@@ -105,7 +103,7 @@ export const NewCaseModal: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.description.trim()) {
-      toast.warning('Uraian keluhan wajib diisi.');
+      alert('Uraian keluhan wajib diisi.');
       return;
     }
     setIsSubmitting(true);
@@ -142,11 +140,10 @@ export const NewCaseModal: React.FC = () => {
         createdBy: currentUser?.email,
       });
 
-      toast.success(`Keluhan #${formData.ticketId} berhasil didaftarkan ke sistem!`);
       setIsNewCaseModalOpen(false);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to create grievance:', err);
-      toast.error('Gagal mendaftarkan keluhan: ' + (err.message || 'Periksa koneksi jaringan.'));
+      alert('Gagal mendaftarkan keluhan. Periksa koneksi jaringan.');
     } finally {
       setIsSubmitting(false);
     }

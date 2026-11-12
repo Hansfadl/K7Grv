@@ -4,7 +4,6 @@ import { useCases } from '../context/CaseContext';
 import { useAuth } from '../context/AuthContext';
 import { getCategories, getDepartments, calculateDueDateFromGrievanceDate } from '../services/db';
 import { X, Edit3, Shield, CheckCircle2, AlertCircle } from 'lucide-react';
-import { useToast } from '../context/ToastContext';
 
 interface EditCaseModalProps {
   caseData: GrievanceCase | null;
@@ -15,7 +14,6 @@ interface EditCaseModalProps {
 export const EditCaseModal: React.FC<EditCaseModalProps> = ({ caseData, isOpen, onClose }) => {
   const { handleUpdateCase } = useCases();
   const { currentUser } = useAuth();
-  const toast = useToast();
 
   const [categories, setCategories] = useState<MasterCategory[]>([]);
   const [departments, setDepartments] = useState<MasterDepartment[]>([]);
@@ -124,12 +122,9 @@ export const EditCaseModal: React.FC<EditCaseModalProps> = ({ caseData, isOpen, 
       };
 
       await handleUpdateCase(caseData.id, updates, 'Revisi data keluhan oleh user berwenang');
-      toast.success(`Data keluhan #${caseData.ticketId} berhasil diperbarui.`);
       onClose();
     } catch (err: any) {
-      const msg = 'Gagal memperbarui keluhan: ' + (err.message || 'Periksa koneksi jaringan.');
-      setErrorMsg(msg);
-      toast.error(msg);
+      setErrorMsg('Gagal memperbarui keluhan: ' + (err.message || 'Periksa koneksi jaringan.'));
     } finally {
       setIsSubmitting(false);
     }
