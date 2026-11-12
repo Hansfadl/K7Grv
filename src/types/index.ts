@@ -204,3 +204,114 @@ export interface MasterDepartment {
   picEmail: string;
   active: boolean;
 }
+
+// 6. Automation & Notification Types
+export type NotificationPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+export type NotificationCategory =
+  | 'Critical Case Alert'
+  | 'Overdue Alert'
+  | 'SLA Reminder'
+  | 'New Grievance'
+  | 'New PIC Assignment'
+  | 'Action Plan Reminder'
+  | 'Approval Request'
+  | 'Case Closed'
+  | 'Case Resolved'
+  | 'Investigation Update'
+  | 'General';
+
+export interface NotificationItem {
+  id: string;
+  recipientId: string;
+  recipientEmail?: string;
+  roleTarget?: 'all_hr' | 'hr_lead' | 'hr_admin' | 'hr_investigator' | 'department_pic' | string;
+  departmentTarget?: string;
+  ticketId?: string;
+  caseId?: string;
+  category: NotificationCategory;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+  priority?: NotificationPriority;
+  targetTab?: 'overview' | 'investigation' | 'root_cause' | 'action_plan' | 'communication' | 'evidence' | string;
+  metadata?: Record<string, any>;
+}
+
+export type ApprovalRequestStatus = 'Pending' | 'Approved' | 'Rejected' | 'Revision Required';
+
+export interface ApprovalRequest {
+  id: string;
+  caseId: string;
+  ticketId: string;
+  requestType: 'case_closure' | 'status_change' | 'capa_verification' | 'sla_extension' | string;
+  requestedBy: string;
+  requestedById: string;
+  requestedRole: UserRole | string;
+  approverRole?: 'hr_lead' | 'hr_admin' | string;
+  assignedApproverId?: string;
+  assignedApproverName?: string;
+  status: ApprovalRequestStatus;
+  requestNotes: string;
+  createdAt: string;
+  previousValue?: string;
+  proposedValue?: string;
+  decidedBy?: string;
+  decidedById?: string;
+  decidedAt?: string;
+  decisionNotes?: string;
+}
+
+export type AutomationEventType =
+  | 'NEW_GRIEVANCE'
+  | 'PIC_ASSIGNED'
+  | 'STATUS_CHANGED'
+  | 'CASE_CLOSED'
+  | 'SLA_REMINDER'
+  | 'SLA_OVERDUE'
+  | 'ACTION_PLAN_REMINDER'
+  | 'ACTION_PLAN_OVERDUE'
+  | 'CRITICAL_ESCALATION'
+  | 'APPROVAL_REQUESTED'
+  | 'APPROVAL_DECIDED';
+
+export type AutomationExecutionStatus = 'Success' | 'Processing' | 'Failed' | 'Skipped';
+
+export interface AutomationLogItem {
+  id: string;
+  automationId: string;
+  eventType: AutomationEventType;
+  ticketId?: string;
+  caseId?: string;
+  recipient: string;
+  recipientId?: string;
+  triggerDate: string;
+  executionStatus: AutomationExecutionStatus;
+  deliveryStatus: 'Delivered' | 'Undelivered' | 'Queued' | 'Suppressed';
+  errorMessage?: string;
+  retryCount?: number;
+  idempotencyKey: string;
+  details?: string;
+  payload?: Record<string, any>;
+  createdAt: string;
+}
+
+export interface AutomationConfig {
+  id: string;
+  isEnabled: boolean;
+  slaReminderHoursBeforeDue: number;
+  checkIntervalMinutes: number;
+  notifyOnNewCase: boolean;
+  notifyOnPicChange: boolean;
+  notifyOnStatusChange: boolean;
+  notifyOnCritical: boolean;
+  notifyOnOverdue: boolean;
+  notifyOnActionPlanDue: boolean;
+  notifyOnApproval: boolean;
+  companyHolidays: string[];
+  escalationRecipients: string[];
+  updatedAt: string;
+  updatedBy?: string;
+}
+

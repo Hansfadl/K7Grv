@@ -30,6 +30,17 @@ import {
   INITIAL_DEPARTMENTS,
 } from './mockData';
 import * as XLSX from 'xlsx';
+import {
+  SJI_COMPANY_HOLIDAYS,
+  getSlaWorkdays,
+  addWorkdays,
+  calculateDueDate,
+  evaluateCaseSla,
+  calculateSlaCompliance,
+  calculateSlaStatus as calcStatus,
+  CaseSlaEvaluation,
+  SlaComplianceSummary,
+} from '../utils/sla';
 
 // Local storage cache keys for instant initial paint & offline tolerance
 const STORAGE_PREFIX = 'sji_hr_v5_firestore_';
@@ -88,77 +99,35 @@ export function formatRoleName(role?: string): string {
   }
 }
 
-// Helper: Get SLA days based on Priority.
-// Critical urgency follows 72 hours (3 calendar days) mandatory escalation rule.
-// Major = 7 calendar days. Minor = 14 calendar days.
+// Export SLA Matrix & Compliance utilities from single source of truth
+export {
+  SJI_COMPANY_HOLIDAYS,
+  getSlaWorkdays,
+  addWorkdays,
+  calculateDueDate,
+  evaluateCaseSla,
+  calculateSlaCompliance,
+};
+export type { CaseSlaEvaluation, SlaComplianceSummary };
+
+// Helper: Get SLA days based on Priority (Workdays: Minor = 3, Major = 7, Critical = 14)
 export function getSlaDays(priority: PriorityLevel): number {
-  switch (priority) {
-    case 'Critical':
-      return 3; // 72 hours (3 calendar days) - mandatory executive escalation
-    case 'Major':
-      return 7; // 7 calendar days - standard investigation & mediation
-    case 'Minor':
-    default:
-      return 14; // 14 calendar days - administrative resolution
-  }
+  return getSlaWorkdays(priority);
 }
 
-// Helper: Calculate Target Due Date based strictly on Grievance Date (dateReceived) and Priority SLA
+// Helper: Calculate Target Due Date based on Grievance Date (dateReceived) and Priority SLA in WORKDAYS
 export function calculateDueDateFromGrievanceDate(dateReceivedStr: string, priority: PriorityLevel): string {
-  const slaDays = getSlaDays(priority);
-  try {
-    const baseDate = new Date(dateReceivedStr);
-    if (isNaN(baseDate.getTime())) {
-      const now = new Date();
-      now.setDate(now.getDate() + slaDays);
-      return now.toISOString().substring(0, 10);
-    }
-    const target = new Date(baseDate.getTime() + slaDays * 86400000);
-    return target.toISOString().substring(0, 10);
-  } catch {
-    const now = new Date();
-    now.setDate(now.getDate() + slaDays);
-    return now.toISOString().substring(0, 10);
-  }
+  return calculateDueDate(dateReceivedStr, priority);
 }
 
-// Helper: Calculate SLA remaining hours & Met/Breached status.
-// For Closed cases, the SLA clock is STOPPED (slaHoursLeft = 0) and never active overdue.
+// Helper: Calculate SLA remaining hours & Met/Overdue status
 export function calculateSlaStatus(
   dateReceived: string,
   dueDate: string,
   status: CaseStatus,
   closingDate?: string | null
 ): { slaStatus: 'On Track' | 'Approaching Due' | 'Breached' | 'Met' | 'Overdue'; slaHoursLeft: number } {
-  if (status === 'Closed') {
-    // When closed, evaluate whether it was closed before or after dueDate
-    if (closingDate && dueDate) {
-      const closedTime = new Date(closingDate).getTime();
-      const dueTime = new Date(dueDate).getTime();
-      const isBreached = closedTime > dueTime;
-      return {
-        slaStatus: isBreached ? 'Breached' : 'Met',
-        slaHoursLeft: 0,
-      };
-    }
-    return { slaStatus: 'Met', slaHoursLeft: 0 };
-  }
-
-  const now = new Date().getTime();
-  const due = new Date(dueDate).getTime();
-  if (isNaN(due)) {
-    return { slaStatus: 'On Track', slaHoursLeft: 72 };
-  }
-
-  const hoursLeft = Math.round((due - now) / (1000 * 60 * 60));
-
-  if (hoursLeft < 0) {
-    return { slaStatus: 'Breached', slaHoursLeft: hoursLeft };
-  }
-  if (hoursLeft <= 48) {
-    return { slaStatus: 'Approaching Due', slaHoursLeft: hoursLeft };
-  }
-  return { slaStatus: 'On Track', slaHoursLeft: hoursLeft };
+  return calcStatus(dateReceived, dueDate, status, closingDate);
 }
 
 /**
@@ -1042,8 +1011,41 @@ export async function saveCategories(categories: MasterCategory[]): Promise<void
   try {
     await setDoc(doc(db, 'master_data', 'categories'), { list: categories });
   } catch (err: any) {
-    console.warn('Error saving categories:', err.message);
+    console.warn('Error saving categories to Firestore:', err.message);
   }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('sji_categories_updated', { detail: categories }));
+  }
+}
+
+export async function updateCategoryDescription(
+  categoryId: string,
+  newDescription: string,
+  actor?: UserProfile | null
+): Promise<MasterCategory[]> {
+  const currentCategories = await getCategories();
+  const target = currentCategories.find((c) => c.id === categoryId);
+  if (!target) {
+    throw new Error(`Kategori keluhan dengan ID "${categoryId}" tidak ditemukan.`);
+  }
+
+  const updatedCategories = currentCategories.map((c) =>
+    c.id === categoryId ? { ...c, description: newDescription.trim() } : c
+  );
+
+  await saveCategories(updatedCategories);
+
+  if (actor) {
+    await logAuditAction({
+      userId: actor.id,
+      userName: actor.displayName,
+      userRole: actor.role,
+      action: 'UPDATE_CATEGORY_DESCRIPTION',
+      details: `Memperbarui deskripsi Complaint Category "${target.name}" (${target.code}).`,
+    });
+  }
+
+  return updatedCategories;
 }
 
 export async function getDepartments(): Promise<MasterDepartment[]> {

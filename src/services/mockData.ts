@@ -22,7 +22,7 @@ export const GRIEVANCE_INSTRUMENTS: GrievanceInstrument[] = [
 // Kosongkan semua data user awal agar user menambahkan sendiri
 export const INITIAL_USERS: UserProfile[] = [];
 
-// 12 Kategori standard SJI (SLA: Critical 3 Hari / 72 Jam Eskalasi, Major 7 Hari, Minor 14 Hari)
+// 12 Kategori standard SJI (SLA Resolusi: Minor 3 Hari Kerja, Major 7 Hari Kerja, Critical 14 Hari Kerja)
 export const INITIAL_CATEGORIES: MasterCategory[] = [
   {
     id: 'cat-01',
@@ -30,7 +30,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     code: 'KBJ',
     defaultPriority: 'Major',
     slaDays: 7,
-    description: 'Keluhan terkait implementasi aturan perusahaan, SOP, surat peringatan, atau kebijakan internal.',
+    description: 'Keluhan terkait implementasi aturan perusahaan, Standar Operasional Prosedur (SOP), surat peringatan (SP), atau kebijakan ketenagakerjaan internal PT SJI.',
     active: true,
   },
   {
@@ -39,7 +39,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     code: 'ATS',
     defaultPriority: 'Major',
     slaDays: 7,
-    description: 'Penyalahgunaan wewenang, perlakuan tidak adil, komunikasi kasar, atau diskriminasi oleh atasan.',
+    description: 'Penyalahgunaan wewenang, perlakuan tidak adil, komunikasi tidak profesional, favoritisme, atau diskriminasi oleh atasan langsung/supervisor.',
     active: true,
   },
   {
@@ -47,8 +47,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Lingkungan Kerja',
     code: 'LK',
     defaultPriority: 'Minor',
-    slaDays: 14,
-    description: 'Kondisi sirkulasi udara, kebisingan, suhu area kerja, atau hubungan interpersonal sesama rekan kerja.',
+    slaDays: 3,
+    description: 'Kondisi fisik area kerja, kenyamanan ruang kerja, sirkulasi udara, kebisingan, suhu lini produksi, atau hubungan interpersonal sesama rekan kerja.',
     active: true,
   },
   {
@@ -56,8 +56,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Pelecehan',
     code: 'PLH',
     defaultPriority: 'Critical',
-    slaDays: 3,
-    description: 'Pelecehan verbal, fisik, seksual, intimidasi, atau tindakan perundungan (bullying). Wajib eskalasi 72 jam.',
+    slaDays: 14,
+    description: 'Pelecehan verbal, fisik, seksual, intimidasi, kekerasan di tempat kerja, atau perundungan (bullying). Penanganan awal & triage segera (72 jam), target resolusi tuntas 14 hari kerja.',
     active: true,
   },
   {
@@ -65,8 +65,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Cuti',
     code: 'CT',
     defaultPriority: 'Minor',
-    slaDays: 14,
-    description: 'Kendala pengajuan cuti tahunan, cuti melahirkan/keguguran, cuti sakit, atau persetujuan hak cuti.',
+    slaDays: 3,
+    description: 'Kendala pengajuan cuti tahunan, cuti melahirkan/keguguran, cuti sakit dengan surat dokter, izin resmi, atau persetujuan hak cuti karyawan.',
     active: true,
   },
   {
@@ -75,7 +75,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     code: 'LBR',
     defaultPriority: 'Major',
     slaDays: 7,
-    description: 'Perhitungan upah lembur tidak sesuai, pembagian jadwal lembur tidak merata, atau pemaksaan jam lembur.',
+    description: 'Perhitungan upah lembur tidak sesuai, pembagian jadwal lembur tidak proporsional, form lembur terlambat, atau pemaksaan jam lembur di luar kesepakatan.',
     active: true,
   },
   {
@@ -83,8 +83,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Fasilitas',
     code: 'FSL',
     defaultPriority: 'Minor',
-    slaDays: 14,
-    description: 'Fasilitas kantin, toilet, musala, loker, area parkir, klinik pabrik, atau transportasi jemputan.',
+    slaDays: 3,
+    description: 'Fasilitas umum pabrik: kantin, toilet, musala, loker kerja, area parkir kendaraan, klinik pabrik, sarana kebersihan, atau transportasi bus jemputan karyawan.',
     active: true,
   },
   {
@@ -92,8 +92,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Keamanan',
     code: 'KMN',
     defaultPriority: 'Critical',
-    slaDays: 3,
-    description: 'Bahaya K3/HSE, ketiadaan APD, mesin tanpa pelindung darurat, bahaya kebakaran, atau kehilangan barang. Wajib eskalasi 72 jam.',
+    slaDays: 14,
+    description: 'Bahaya K3 (Keselamatan dan Kesehatan Kerja), ketiadaan APD darurat, mesin tanpa guard pelindung, ancaman keselamatan fisik, atau bahaya kebakaran. Penanganan awal segera (72 jam), target resolusi 14 hari kerja.',
     active: true,
   },
   {
@@ -102,7 +102,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     code: 'PRD',
     defaultPriority: 'Major',
     slaDays: 7,
-    description: 'Target output tidak realistis, material cacat dari supplier, kendala alur kerja lini, atau bottleneck mesin.',
+    description: 'Target output lini kerja tidak realistis, material cacat dari supplier, kendala alur kerja proses produksi, atau bottleneck mesin operasional.',
     active: true,
   },
   {
@@ -110,8 +110,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'People Development',
     code: 'PPD',
     defaultPriority: 'Minor',
-    slaDays: 14,
-    description: 'Peluang pelatihan/skill training, program sertifikasi operator, kejelasan jenjang karier, atau promosi.',
+    slaDays: 3,
+    description: 'Peluang pelatihan/skill training operator, program sertifikasi kompetensi, kejelasan jenjang karier, penilaian kinerja berkala, atau promosi jabatan.',
     active: true,
   },
   {
@@ -120,7 +120,7 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     code: 'BNF',
     defaultPriority: 'Major',
     slaDays: 7,
-    description: 'Jaminan BPJS Ketenagakerjaan/Kesehatan, tunjangan hari raya (THR), insentif kehadiran, atau bonus.',
+    description: 'Jaminan BPJS Ketenagakerjaan & BPJS Kesehatan, tunjangan hari raya (THR), insentif kehadiran kerja, uang makan/transportasi, atau bonus kinerja.',
     active: true,
   },
   {
@@ -128,8 +128,8 @@ export const INITIAL_CATEGORIES: MasterCategory[] = [
     name: 'Absensi',
     code: 'ABS',
     defaultPriority: 'Minor',
-    slaDays: 14,
-    description: 'Masalah mesin fingerprint/face recognition, ketidaktercatatan jam masuk, atau rekonsiliasi keterlambatan.',
+    slaDays: 3,
+    description: 'Masalah mesin fingerprint/face recognition, ketidaktercatatan jam masuk/pulang kerja, koreksi absensi manual, atau rekonsiliasi pemotongan keterlambatan.',
     active: true,
   }
 ];

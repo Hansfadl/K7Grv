@@ -27,6 +27,7 @@ import {
   FileText
 } from 'lucide-react';
 import { GrievanceCase } from '../types';
+import { calculateSlaCompliance, evaluateCaseSla } from '../services/db';
 
 interface DashboardViewProps {
   onOpenCase: (c: GrievanceCase) => void;
@@ -85,8 +86,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
     const actionTaken = filteredCases.filter((c) => c.status === 'Action Taken').length;
     const activeCount = total - closed;
 
+    const slaSummary = calculateSlaCompliance(filteredCases);
+
     const activeBreached = filteredCases.filter(
-      (c) => c.slaStatus === 'Breached' && c.status !== 'Closed'
+      (c) => c.status !== 'Closed' && evaluateCaseSla(c).isOverdue
     ).length;
 
     const criticalCount = filteredCases.filter(
@@ -102,10 +105,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
     ).length;
 
     const hasCases = total > 0;
-    const complianceRate = hasCases
-      ? Math.max(0, Math.round(((total - activeBreached) / total) * 100))
-      : 0;
-
+    const complianceRate = slaSummary.complianceRate;
     const resolutionRate = hasCases ? Math.round((closed / total) * 100) : 0;
 
     return {
@@ -121,6 +121,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
       pendingCapaCount,
       hasCases,
       complianceRate,
+      onTime: slaSummary.onTime,
+      overdue: slaSummary.overdue,
+      pending: slaSummary.pending,
+      dataIncomplete: slaSummary.dataIncomplete,
       resolutionRate,
     };
   }, [filteredCases]);
@@ -128,15 +132,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
   // Urgent attention queue: Breached or Critical or Approaching
   const urgentQueue = useMemo(() => {
     return filteredCases
-      .filter(
-        (c) =>
-          c.status !== 'Closed' &&
-          (c.slaStatus === 'Breached' || c.priority === 'Critical' || c.slaStatus === 'Approaching Due')
-      )
+      .filter((c) => {
+        if (c.status === 'Closed') return false;
+        const ev = evaluateCaseSla(c);
+        return ev.isOverdue || c.priority === 'Critical' || c.slaStatus === 'Approaching Due';
+      })
       .sort((a, b) => {
-        // Prioritize Breached first, then Critical, then Approaching
+        // Prioritize Overdue first, then Critical, then Approaching
         const score = (c: GrievanceCase) => {
-          if (c.slaStatus === 'Breached') return 3;
+          const ev = evaluateCaseSla(c);
+          if (ev.isOverdue) return 3;
           if (c.priority === 'Critical') return 2;
           if (c.slaStatus === 'Approaching Due') return 1;
           return 0;
@@ -212,12 +217,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenCase, onNavi
 
   // SLA performance breakdown
   const slaBreakdown = useMemo(() => {
-    const met = filteredCases.filter((c) => c.slaStatus === 'Met' || (c.status === 'Closed' && c.slaStatus !== 'Breached')).length;
-    const onTrack = filteredCases.filter((c) => c.slaStatus === 'On Track' && c.status !== 'Closed').length;
-    const approaching = filteredCases.filter((c) => c.slaStatus === 'Approaching Due' && c.status !== 'Closed').length;
-    const breached = filteredCases.filter((c) => c.slaStatus === 'Breached' && c.status !== 'Closed').length;
-
-    return { met, onTrack, approaching, breached };
+    const summary = calculateSlaCompliance(filteredCases);
+    const approaching = filteredCases.filter(
+      (c) => c.slaStatus === 'Approaching Due' && c.status !== 'Closed'
+    ).length;
+    return {
+      met: summary.onTime,
+      onTrack: summary.pending,
+      approaching,
+      breached: summary.overdue,
+      overdue: summary.overdue,
+      pending: summary.pending,
+      dataIncomplete: summary.dataIncomplete,
+    };
   }, [filteredCases]);
 
   return (

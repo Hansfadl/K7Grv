@@ -44,6 +44,11 @@ export const NewCaseModal: React.FC = () => {
     getCategories().then((cats) => {
       if (cats && cats.length > 0) setCategories(cats);
     });
+
+    const handleCategoriesUpdated = (e: any) => {
+      if (e.detail) setCategories(e.detail);
+    };
+    window.addEventListener('sji_categories_updated', handleCategoriesUpdated);
     getDepartments().then((depts) => {
       if (depts && depts.length > 0) {
         setDepartments(depts);
@@ -55,6 +60,8 @@ export const NewCaseModal: React.FC = () => {
         }
       }
     });
+
+    return () => window.removeEventListener('sji_categories_updated', handleCategoriesUpdated);
   }, [isNewCaseModalOpen]);
 
   if (!isNewCaseModalOpen) return null;
@@ -130,7 +137,7 @@ export const NewCaseModal: React.FC = () => {
         dueDate: finalDueDate,
         closingDate: null,
         slaStatus: 'On Track',
-        slaHoursLeft: (formData.priority === 'Critical' ? 3 : formData.priority === 'Major' ? 7 : 14) * 24,
+        slaHoursLeft: (formData.priority === 'Critical' ? 14 : formData.priority === 'Major' ? 7 : 3) * 24,
         lastUpdate: new Date().toISOString().replace('T', ' ').substring(0, 16),
         description: formData.description,
         incidentDate: formData.incidentDate || null,
@@ -327,22 +334,36 @@ export const NewCaseModal: React.FC = () => {
                   </option>
                 ))}
               </select>
+              {(() => {
+                const selected = categories.find((c) => c.name === formData.complaintCategory);
+                if (!selected?.description) return null;
+                return (
+                  <p className="mt-1.5 text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200 whitespace-pre-line break-words leading-relaxed">
+                    {selected.description}
+                  </p>
+                );
+              })()}
             </div>
           </div>
 
           {/* Priority & SLA Info */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-slate-700 font-semibold mb-1">Prioritas (SLA Target) *</label>
+              <label className="block text-slate-700 font-semibold mb-1">Prioritas (SLA Target Resolusi) *</label>
               <select
                 value={formData.priority}
                 onChange={(e) => handlePriorityChange(e.target.value as PriorityLevel)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium"
               >
-                <option value="Minor">Minor (3 Hari)</option>
-                <option value="Major">Major (7 Hari)</option>
-                <option value="Critical">Critical (14 Hari)</option>
+                <option value="Minor">Minor (3 Hari Kerja)</option>
+                <option value="Major">Major (7 Hari Kerja)</option>
+                <option value="Critical">Critical (14 Hari Kerja)</option>
               </select>
+              {formData.priority === 'Critical' && (
+                <p className="mt-1 text-[10px] text-rose-700 font-medium">
+                  *Khusus kasus pelecehan, kekerasan, atau keselamatan kerja, penanganan awal dilakukan segera dalam 72 jam.
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-slate-700 font-semibold mb-1">PIC Departemen Bertanggung Jawab</label>

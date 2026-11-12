@@ -21,7 +21,8 @@ import {
   PanelLeft,
   BarChart2,
   PieChart,
-  Layers
+  Layers,
+  Cpu
 } from 'lucide-react';
 
 export type AppModule =
@@ -38,7 +39,8 @@ export type AppModule =
   | 'annual_report'
   | 'custom_report'
   | 'master_data'
-  | 'user_management';
+  | 'user_management'
+  | 'automation_logs';
 
 interface SidebarProps {
   currentModule: AppModule;
@@ -336,6 +338,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <Users className="w-3.5 h-3.5 shrink-0 text-slate-400" />
                     {!isCollapsed && <span>User Management</span>}
+                  </button>
+                )}
+                {canManageUsers && (
+                  <button
+                    onClick={() => onSelectModule('automation_logs')}
+                    title={isCollapsed ? 'Automation & SLA Engine' : undefined}
+                    className={`w-full flex items-center ${
+                      isCollapsed ? 'justify-center py-2' : 'space-x-2.5 px-3 py-1.5'
+                    } rounded-xl text-xs font-medium transition ${
+                      currentModule === 'automation_logs'
+                        ? 'bg-blue-600 text-white font-semibold'
+                        : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                    }`}
+                  >
+                    <Cpu className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                    {!isCollapsed && <span>Automation & SLA</span>}
                   </button>
                 )}
               </div>

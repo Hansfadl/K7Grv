@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { generateAiReportNarrative } from '../services/ai';
 import { GrievanceCase } from '../types';
+import { calculateSlaCompliance, evaluateCaseSla } from '../services/db';
 
 interface ReportsViewProps {
   initialType?: 'weekly' | 'monthly' | 'quarterly' | 'annual' | 'custom';
@@ -98,13 +99,26 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialType = 'weekly'
     return cases;
   }, [cases, reportType, customStartDmY, customEndDmY]);
 
-  // Overall counts
+  // Overall counts & SLA Audit compliance metrics
   const totalCases = filteredCases.length;
   const closedCases = filteredCases.filter((c) => c.status === 'Closed');
   const openCases = filteredCases.filter((c) => c.status !== 'Closed');
-  const overdueCases = filteredCases.filter((c) => c.slaStatus === 'Overdue');
-  const onTrackCases = filteredCases.filter((c) => c.slaStatus !== 'Overdue');
-  const slaComplianceRate = totalCases > 0 ? Math.round((onTrackCases.length / totalCases) * 100) : 100;
+
+  // SLA Compliance using unified SJI formula:
+  // SLA Compliance = (Total On Time / (Total On Time + Total Overdue)) * 100%
+  // Pending dan Data Incomplete tidak masuk denominator.
+  const slaSummary = useMemo(() => {
+    let cutoffDate: string | undefined = undefined;
+    if (reportType === 'custom') {
+      cutoffDate = parseDmYToIso(customEndDmY);
+    }
+    return calculateSlaCompliance(filteredCases, cutoffDate);
+  }, [filteredCases, reportType, customEndDmY]);
+
+  const onTimeCases = useMemo(() => filteredCases.filter((c) => evaluateCaseSla(c).isOnTime), [filteredCases]);
+  const overdueCases = useMemo(() => filteredCases.filter((c) => evaluateCaseSla(c).isOverdue), [filteredCases]);
+  const pendingCases = useMemo(() => filteredCases.filter((c) => evaluateCaseSla(c).isPending), [filteredCases]);
+  const slaComplianceRate = slaSummary.complianceRate;
 
   // 10. RESOLUTION PERFORMANCE INDICATORS
   // Average Resolution Time (in Days): Calculated from dateReceived (Grievance Date) to closingDate for Closed cases
@@ -480,26 +494,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialType = 'weekly'
               <div className="text-[10px] text-slate-500">Periode Terpilih</div>
             </div>
 
-            {/* Total Resolved */}
+            {/* Total Resolved (On Time vs Overdue) */}
             <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3.5 space-y-1">
               <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide">
-                Total Resolved
+                On Time Resolved
               </div>
               <div className="text-2xl font-black text-emerald-900 font-mono">
-                {closedCases.length}
+                {slaSummary.onTime}
               </div>
-              <div className="text-[10px] text-emerald-700">Status Closed</div>
-            </div>
-
-            {/* Total Open */}
-            <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 space-y-1">
-              <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">
-                Total Open Cases
-              </div>
-              <div className="text-2xl font-black text-amber-900 font-mono">
-                {openCases.length}
-              </div>
-              <div className="text-[10px] text-amber-700">Dalam Penanganan</div>
+              <div className="text-[10px] text-emerald-700">Tepat / &le; Due Date ({closedCases.length} Closed)</div>
             </div>
 
             {/* Overdue */}
@@ -508,9 +511,20 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialType = 'weekly'
                 Overdue Cases
               </div>
               <div className="text-2xl font-black text-rose-900 font-mono">
-                {overdueCases.length}
+                {slaSummary.overdue}
               </div>
-              <div className="text-[10px] text-rose-700">Melewati SLA</div>
+              <div className="text-[10px] text-rose-700">Melewati SLA Target</div>
+            </div>
+
+            {/* Pending In Progress */}
+            <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5 space-y-1">
+              <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">
+                Pending Active
+              </div>
+              <div className="text-2xl font-black text-amber-900 font-mono">
+                {slaSummary.pending}
+              </div>
+              <div className="text-[10px] text-amber-700">Due Date Belum Lewat</div>
             </div>
 
             {/* SLA Compliance */}
@@ -521,7 +535,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialType = 'weekly'
               <div className="text-2xl font-black text-indigo-900 font-mono">
                 {slaComplianceRate}%
               </div>
-              <div className="text-[10px] text-indigo-700">Target Kepatuhan</div>
+              <div className="text-[10px] text-indigo-700">Formula Audit SJI</div>
             </div>
 
             {/* Critical Priority Count */}
@@ -534,6 +548,17 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialType = 'weekly'
               </div>
               <div className="text-[10px] text-purple-700">Penanganan Segera</div>
             </div>
+          </div>
+
+          {/* Audit Formula Explanation Notice */}
+          <div className="mt-2.5 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600 flex flex-wrap items-center justify-between gap-2">
+            <span>
+              <strong>Formula Audit SLA:</strong> <code>({slaSummary.onTime} On Time / ({slaSummary.onTime} On Time + {slaSummary.overdue} Overdue)) × 100% = {slaComplianceRate}%</code>.
+              Kasus <strong>Pending ({slaSummary.pending})</strong> dan <strong>Data Incomplete ({slaSummary.dataIncomplete})</strong> dikecualikan dari denominator.
+            </span>
+            <span className="text-[10px] text-slate-500 font-medium">
+              *Tingkat 100% hanya tercapai bila seluruh kasus yang selesai tepat waktu.
+            </span>
           </div>
 
           {/* Average Resolution Time by Department & Category Breakdown */}

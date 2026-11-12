@@ -9,6 +9,8 @@ import {
   filterCasesByRole,
   logAuditAction,
   calculateDueDateFromGrievanceDate,
+  calculateSlaCompliance,
+  evaluateCaseSla,
   getSyncStatus,
   subscribeToSyncStatus,
   syncOfflineCasesToFirestore,
@@ -70,6 +72,10 @@ interface CaseContextType {
     slaApproachingCount: number;
     complianceRate: number;
     hasCases: boolean;
+    onTime?: number;
+    overdue?: number;
+    pending?: number;
+    dataIncomplete?: number;
   };
 }
 
@@ -172,14 +178,12 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Critical cases requiring active emergency escalation
     const criticalCount = cases.filter((c) => c.priority === 'Critical' && c.status !== 'Closed').length;
     
-    // SLA tracking: Active breached cases vs overall breached records
-    const slaBreachedCount = cases.filter((c) => c.slaStatus === 'Breached').length;
-    const activeBreached = cases.filter((c) => c.status !== 'Closed' && c.slaStatus === 'Breached').length;
+    // SLA tracking: Unified SJI SLA compliance calculation
+    const slaSummary = calculateSlaCompliance(cases);
+    const activeBreached = cases.filter((c) => c.status !== 'Closed' && evaluateCaseSla(c).isOverdue).length;
     const slaApproachingCount = cases.filter((c) => c.status !== 'Closed' && c.slaStatus === 'Approaching Due').length;
     
-    // Rule D: Denominator must be strictly valid. Do NOT show fake 100% when there is no data!
     const hasCases = total > 0;
-    const complianceRate = hasCases ? Math.max(0, Math.round(((total - slaBreachedCount) / total) * 100)) : 0;
 
     return {
       total,
@@ -189,10 +193,14 @@ export const CaseProvider: React.FC<{ children: React.ReactNode }> = ({ children
       actionTaken,
       closed,
       criticalCount,
-      slaBreachedCount,
+      slaBreachedCount: slaSummary.overdue,
       activeBreached,
       slaApproachingCount,
-      complianceRate,
+      complianceRate: slaSummary.complianceRate,
+      onTime: slaSummary.onTime,
+      overdue: slaSummary.overdue,
+      pending: slaSummary.pending,
+      dataIncomplete: slaSummary.dataIncomplete,
       hasCases,
     };
   }, [cases]);

@@ -43,6 +43,12 @@ export const EditCaseModal: React.FC<EditCaseModalProps> = ({ caseData, isOpen, 
   useEffect(() => {
     getCategories().then((cats) => cats && setCategories(cats));
     getDepartments().then((depts) => depts && setDepartments(depts));
+
+    const handleCategoriesUpdated = (e: any) => {
+      if (e.detail) setCategories(e.detail);
+    };
+    window.addEventListener('sji_categories_updated', handleCategoriesUpdated);
+    return () => window.removeEventListener('sji_categories_updated', handleCategoriesUpdated);
   }, []);
 
   useEffect(() => {
@@ -225,9 +231,9 @@ export const EditCaseModal: React.FC<EditCaseModalProps> = ({ caseData, isOpen, 
                 onChange={(e) => handlePriorityChange(e.target.value as PriorityLevel)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white font-medium"
               >
-                <option value="Minor">Minor (3 Hari)</option>
-                <option value="Major">Major (7 Hari)</option>
-                <option value="Critical">Critical (14 Hari)</option>
+                <option value="Minor">Minor (3 Hari Kerja)</option>
+                <option value="Major">Major (7 Hari Kerja)</option>
+                <option value="Critical">Critical (14 Hari Kerja)</option>
               </select>
             </div>
 
@@ -276,6 +282,15 @@ export const EditCaseModal: React.FC<EditCaseModalProps> = ({ caseData, isOpen, 
                   </option>
                 ))}
               </select>
+              {(() => {
+                const selected = categories.find((c) => c.name === formData.complaintCategory);
+                if (!selected?.description) return null;
+                return (
+                  <p className="mt-1.5 text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200 whitespace-pre-line break-words leading-relaxed">
+                    {selected.description}
+                  </p>
+                );
+              })()}
             </div>
           </div>
 

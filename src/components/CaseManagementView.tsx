@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useCases } from '../context/CaseContext';
 import { useAuth } from '../context/AuthContext';
 import { GrievanceCase, MasterDepartment, MasterCategory, GrievanceInstrument } from '../types';
-import { getDepartments, getCategories } from '../services/db';
+import { getDepartments, getCategories, evaluateCaseSla } from '../services/db';
 import { INITIAL_DEPARTMENTS, INITIAL_CATEGORIES } from '../services/mockData';
 import { EditCaseModal } from './EditCaseModal';
 import {
@@ -177,14 +177,24 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
 
   const getSlaBadge = (c: GrievanceCase) => {
     if (c.status === 'Closed') {
+      const ev = evaluateCaseSla(c);
+      if (ev.isOverdue) {
+        return (
+          <span className="inline-flex items-center text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+            <Clock className="w-3 h-3 mr-1 text-rose-600" />
+            Closed (Overdue)
+          </span>
+        );
+      }
       return (
         <span className="inline-flex items-center text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
           <CheckCircle className="w-3 h-3 mr-1 text-emerald-600" />
-          Closed
+          Closed (On Time)
         </span>
       );
     }
-    if (c.slaStatus === 'Breached') {
+    const ev = evaluateCaseSla(c);
+    if (ev.isOverdue || c.slaStatus === 'Breached' || c.slaStatus === 'Overdue') {
       return (
         <span className="inline-flex items-center text-[10px] font-bold text-white bg-rose-600 px-2 py-0.5 rounded animate-pulse">
           <Clock className="w-3 h-3 mr-1" />
@@ -192,11 +202,18 @@ export const CaseManagementView: React.FC<CaseManagementViewProps> = ({ onOpenCa
         </span>
       );
     }
-    if (c.slaStatus === 'Approaching Due') {
+    if (ev.isPending && c.slaStatus === 'Approaching Due') {
       return (
         <span className="inline-flex items-center text-[10px] font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
           <Clock className="w-3 h-3 mr-1 text-amber-600" />
           {c.slaHoursLeft}h left
+        </span>
+      );
+    }
+    if (ev.isDataIncomplete) {
+      return (
+        <span className="inline-flex items-center text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+          Incomplete Due Date
         </span>
       );
     }
