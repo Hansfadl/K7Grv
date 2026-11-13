@@ -8,7 +8,7 @@ import {
   deleteDoc,
   onSnapshot,
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, handleFirestoreError, OperationType } from './firebase';
 import {
   GrievanceCase,
   InvestigationRecord,
@@ -21,7 +21,9 @@ import {
   UserProfile,
   PriorityLevel,
   CaseStatus,
-  GrievanceInstrument
+  GrievanceInstrument,
+  AiAnalysisRecord,
+  AiReviewStatus
 } from '../types';
 import {
   INITIAL_CASES,
@@ -1328,4 +1330,234 @@ export function exportCasesToExcel(cases: GrievanceCase[], format: 'xlsx' | 'csv
 
   const fileName = `SJI_Grievance_Report_${new Date().toISOString().substring(0, 10)}.${format}`;
   XLSX.writeFile(workbook, fileName, { bookType: format });
+}
+
+// ==========================================
+// 10. SJI AI INTELLIGENCE PERSISTENCE
+// ==========================================
+
+export async function getCaseAiAnalyses(caseId: string): Promise<AiAnalysisRecord[]> {
+  const path = `cases/${caseId}/ai_analyses`;
+  try {
+    const q = collection(db, 'cases', caseId, 'ai_analyses');
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+      const list = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<AiAnalysisRecord, 'id'>) }));
+      list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      const localMap = getLocalData<Record<string, AiAnalysisRecord[]>>('ai_analyses', {});
+      localMap[caseId] = list;
+      setLocalData('ai_analyses', localMap);
+      return list;
+    }
+  } catch (err: any) {
+    console.warn(`AI analyses read fallback (${path}):`, err.message);
+  }
+  const localMap = getLocalData<Record<string, AiAnalysisRecord[]>>('ai_analyses', {});
+  return (localMap[caseId] || []).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+}
+
+export async function saveCaseAiAnalysis<T>(
+  caseId: string,
+  record: Omit<AiAnalysisRecord<T>, 'id' | 'createdAt' | 'createdBy' | 'createdById'>,
+  user: UserProfile
+): Promise<AiAnalysisRecord<T>> {
+  const newId = `ai-${record.analysisType}-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
+  const nowStamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const fullRecord: AiAnalysisRecord<T> = sanitizeForFirestore({
+    ...record,
+    id: newId,
+    caseId,
+    createdBy: user.displayName,
+    createdById: user.id,
+    createdAt: nowStamp,
+    reviewStatus: record.reviewStatus || 'Pending Review',
+    reviewedBy: null,
+    reviewedByRole: null,
+    reviewedAt: null,
+    reviewNotes: null,
+    appliedToModule: false,
+    appliedAt: null,
+  });
+
+  const path = `cases/${caseId}/ai_analyses/${newId}`;
+  try {
+    await setDoc(doc(db, 'cases', caseId, 'ai_analyses', newId), fullRecord);
+  } catch (err: any) {
+    console.error(`Firestore save AI analysis error (${path}):`, err.message);
+    notifySyncError(`Gagal menyimpan riwayat AI (${record.title}) ke Firestore: ${err.message}`);
+  }
+
+  const localMap = getLocalData<Record<string, AiAnalysisRecord[]>>('ai_analyses', {});
+  localMap[caseId] = [fullRecord, ...(localMap[caseId] || [])];
+  setLocalData('ai_analyses', localMap);
+
+  await logAuditAction({
+    userId: user.id,
+    userName: user.displayName,
+    userRole: formatRoleName(user.role),
+    action: 'AI_ANALYSIS_GENERATED',
+    caseId,
+    ticketId: record.ticketId || undefined,
+    details: `Menjalankan SJI AI Intelligence (${record.analysisType}) untuk tiket #${record.ticketId || caseId}. Model: ${record.modelUsed}. Status: Pending Review.`,
+  });
+
+  return fullRecord;
+}
+
+export async function updateCaseAiAnalysisReview(
+  caseId: string,
+  analysisId: string,
+  reviewStatus: AiReviewStatus,
+  user: UserProfile,
+  reviewNotes?: string,
+  appliedToModule?: boolean
+): Promise<void> {
+  const nowStamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const localMap = getLocalData<Record<string, AiAnalysisRecord[]>>('ai_analyses', {});
+  const list = localMap[caseId] || [];
+  const existing = list.find((a) => a.id === analysisId);
+
+  const updates: Partial<AiAnalysisRecord> = sanitizeForFirestore({
+    reviewStatus,
+    reviewedBy: user.displayName,
+    reviewedByRole: formatRoleName(user.role),
+    reviewedAt: nowStamp,
+    reviewNotes: reviewNotes !== undefined ? reviewNotes : (existing?.reviewNotes ?? null),
+    ...(appliedToModule !== undefined
+      ? {
+          appliedToModule,
+          appliedAt: appliedToModule ? nowStamp : (existing?.appliedAt ?? null),
+        }
+      : {}),
+  });
+
+  const path = `cases/${caseId}/ai_analyses/${analysisId}`;
+  try {
+    await updateDoc(doc(db, 'cases', caseId, 'ai_analyses', analysisId), updates);
+  } catch (err: any) {
+    try {
+      await setDoc(doc(db, 'cases', caseId, 'ai_analyses', analysisId), sanitizeForFirestore({ ...(existing || {}), ...updates }), { merge: true });
+    } catch (innerErr: any) {
+      handleFirestoreError(innerErr, OperationType.UPDATE, path);
+    }
+  }
+
+  localMap[caseId] = list.map((a) => (a.id === analysisId ? { ...a, ...updates } : a));
+  setLocalData('ai_analyses', localMap);
+
+  await logAuditAction({
+    userId: user.id,
+    userName: user.displayName,
+    userRole: formatRoleName(user.role),
+    action: appliedToModule ? 'AI_DRAFT_APPLIED' : `AI_ANALYSIS_${reviewStatus.toUpperCase().replace(/\s+/g, '_')}`,
+    caseId,
+    ticketId: existing?.ticketId || undefined,
+    details: appliedToModule
+      ? `Menerapkan draft AI (${existing?.analysisType || analysisId}) ke modul resmi setelah persetujuan HR.`
+      : `Meninjau rekomendasi AI (${existing?.analysisType || analysisId}) dengan status: ${reviewStatus}.${reviewNotes ? ` Catatan: ${reviewNotes}` : ''}`,
+  });
+}
+
+export async function getGlobalAiInsights(): Promise<AiAnalysisRecord[]> {
+  try {
+    const q = collection(db, 'ai_insights');
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+      const list = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<AiAnalysisRecord, 'id'>) }));
+      list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      setLocalData('ai_insights', list);
+      return list;
+    }
+  } catch (err: any) {
+    console.warn('Global AI insights read fallback:', err.message);
+  }
+  const local = getLocalData<AiAnalysisRecord[]>('ai_insights', []);
+  return local.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+}
+
+export async function saveGlobalAiInsight<T>(
+  record: Omit<AiAnalysisRecord<T>, 'id' | 'createdAt' | 'createdBy' | 'createdById'>,
+  user: UserProfile
+): Promise<AiAnalysisRecord<T>> {
+  const newId = `insight-${record.analysisType}-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
+  const nowStamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const fullRecord: AiAnalysisRecord<T> = sanitizeForFirestore({
+    ...record,
+    id: newId,
+    caseId: null,
+    ticketId: null,
+    createdBy: user.displayName,
+    createdById: user.id,
+    createdAt: nowStamp,
+    reviewStatus: record.reviewStatus || 'Pending Review',
+    reviewedBy: null,
+    reviewedByRole: null,
+    reviewedAt: null,
+    reviewNotes: null,
+    appliedToModule: false,
+    appliedAt: null,
+  });
+
+  try {
+    await setDoc(doc(db, 'ai_insights', newId), fullRecord);
+  } catch (err: any) {
+    console.error('Firestore save global AI insight error:', err.message);
+    notifySyncError(`Gagal menyimpan insight AI (${record.title}) ke Firestore: ${err.message}`);
+  }
+
+  const local = getLocalData<AiAnalysisRecord[]>('ai_insights', []);
+  setLocalData('ai_insights', [fullRecord, ...local]);
+
+  await logAuditAction({
+    userId: user.id,
+    userName: user.displayName,
+    userRole: formatRoleName(user.role),
+    action: 'AI_GLOBAL_INSIGHT_GENERATED',
+    details: `Menjalankan SJI AI Intelligence (${record.analysisType}): ${record.title}. Model: ${record.modelUsed}.`,
+  });
+
+  return fullRecord;
+}
+
+export async function updateGlobalAiInsightReview(
+  insightId: string,
+  reviewStatus: AiReviewStatus,
+  user: UserProfile,
+  reviewNotes?: string
+): Promise<void> {
+  const nowStamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const local = getLocalData<AiAnalysisRecord[]>('ai_insights', []);
+  const existing = local.find((i) => i.id === insightId);
+
+  const updates: Partial<AiAnalysisRecord> = sanitizeForFirestore({
+    reviewStatus,
+    reviewedBy: user.displayName,
+    reviewedByRole: formatRoleName(user.role),
+    reviewedAt: nowStamp,
+    reviewNotes: reviewNotes !== undefined ? reviewNotes : (existing?.reviewNotes ?? null),
+  });
+
+  const path = `ai_insights/${insightId}`;
+  try {
+    await updateDoc(doc(db, 'ai_insights', insightId), updates);
+  } catch (err: any) {
+    try {
+      await setDoc(doc(db, 'ai_insights', insightId), sanitizeForFirestore({ ...(existing || {}), ...updates }), { merge: true });
+    } catch (innerErr: any) {
+      handleFirestoreError(innerErr, OperationType.UPDATE, path);
+    }
+  }
+
+  setLocalData(
+    'ai_insights',
+    local.map((i) => (i.id === insightId ? { ...i, ...updates } : i))
+  );
+
+  await logAuditAction({
+    userId: user.id,
+    userName: user.displayName,
+    userRole: formatRoleName(user.role),
+    action: `AI_INSIGHT_${reviewStatus.toUpperCase().replace(/\s+/g, '_')}`,
+    details: `Meninjau insight AI global (${existing?.analysisType || insightId}) dengan status: ${reviewStatus}.${reviewNotes ? ` Catatan: ${reviewNotes}` : ''}`,
+  });
 }

@@ -22,12 +22,14 @@ import {
   BarChart2,
   PieChart,
   Layers,
-  Cpu
+  Cpu,
+  Sparkles
 } from 'lucide-react';
 
 export type AppModule =
   | 'dashboard'
   | 'cases'
+  | 'ai_intelligence'
   | 'investigation'
   | 'root_cause'
   | 'action_plan'
@@ -55,7 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   onToggle
 }) => {
-  const { currentUser, canManageUsers, canManageMasterData } = useAuth();
+  const { currentUser, canManageUsers, canManageMasterData, isPic } = useAuth();
   const { stats } = useCases();
 
   // Collapsed desktop state (compact icon-only vs full width)
@@ -78,6 +80,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: stats.total > 0 ? stats.total : undefined,
       badgeColor: 'bg-blue-100 text-blue-900',
     },
+    ...(!isPic
+      ? [{ id: 'ai_intelligence' as AppModule, label: 'SJI AI Intelligence', icon: Sparkles }]
+      : []),
   ];
 
   const investigationModules = [

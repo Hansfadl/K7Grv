@@ -190,6 +190,29 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["type", "name", "active"]
+    },
+    "AiAnalysisRecord": {
+      "title": "AiAnalysisRecord",
+      "description": "AI Decision Support analysis record with HR review and approval governance",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "caseId": { "type": "string", "maxLength": 128 },
+        "ticketId": { "type": "string", "maxLength": 64 },
+        "analysisType": { "type": "string", "enum": ["grievance_analysis", "root_cause", "repeat_detection", "risk_assessment", "recommended_capa", "management_insights"] },
+        "title": { "type": "string", "maxLength": 256 },
+        "dataLimitations": { "type": "string", "maxLength": 2000 },
+        "modelUsed": { "type": "string", "maxLength": 128 },
+        "reviewStatus": { "type": "string", "enum": ["Pending Review", "Approved", "Rejected"] },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewedAt": { "type": "string", "maxLength": 64 },
+        "reviewNotes": { "type": "string", "maxLength": 2000 },
+        "appliedToModule": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdById": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["analysisType", "title", "reviewStatus", "createdBy", "createdAt"]
     }
   },
   "firestore": {
@@ -213,6 +236,10 @@
       "schema": "RootCauseAnalysis",
       "description": "Subcollection containing 5 Whys and systemic root cause analysis"
     },
+    "/cases/{caseId}/root_causes_6m/{rcId}": {
+      "schema": "RootCauseAnalysis",
+      "description": "Subcollection containing 6M Ishikawa root cause analysis records"
+    },
     "/cases/{caseId}/action_plans/{actionId}": {
       "schema": "ActionPlan",
       "description": "Subcollection of corrective and preventive action items"
@@ -224,6 +251,14 @@
     "/cases/{caseId}/evidence/{evidenceId}": {
       "schema": "EvidenceItem",
       "description": "Subcollection of evidence files and chain-of-custody metadata"
+    },
+    "/cases/{caseId}/ai_analyses/{analysisId}": {
+      "schema": "AiAnalysisRecord",
+      "description": "Subcollection of AI decision support analysis drafts and HR approval status"
+    },
+    "/ai_insights/{insightId}": {
+      "schema": "AiAnalysisRecord",
+      "description": "Collection of period management insights, risk assessments, and repeat pattern analyses"
     },
     "/audit_logs/{logId}": {
       "schema": "AuditLog",

@@ -19,6 +19,7 @@ import { ReportsView } from './components/ReportsView';
 import { MasterDataView } from './components/MasterDataView';
 import { UserManagementView } from './components/UserManagementView';
 import { AutomationLogView } from './components/AutomationLogView';
+import { AiIntelligenceView } from './components/AiIntelligenceView';
 import { CaseDetailModal } from './components/CaseDetailModal';
 import { NewCaseModal } from './components/NewCaseModal';
 import { ExcelImportModal } from './components/ExcelImportModal';
@@ -68,6 +69,10 @@ const AppContent: React.FC = () => {
 
             {currentModule === 'cases' && (
               <CaseManagementView onOpenCase={handleOpenCase} />
+            )}
+
+            {currentModule === 'ai_intelligence' && (
+              <AiIntelligenceView onOpenCase={handleOpenCase} />
             )}
 
             {currentModule === 'investigation' && (

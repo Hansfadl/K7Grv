@@ -315,3 +315,163 @@ export interface AutomationConfig {
   updatedBy?: string;
 }
 
+// 7. SJI AI Intelligence (Decision Support System & Governance)
+export type AiReviewStatus = 'Pending Review' | 'Approved' | 'Rejected';
+
+export type AiAnalysisType =
+  | 'grievance_analysis'
+  | 'root_cause'
+  | 'repeat_detection'
+  | 'risk_assessment'
+  | 'recommended_capa'
+  | 'management_insights';
+
+export interface AiGrievanceAnalysis {
+  recommendedCategory: string;
+  recommendedPriority: PriorityLevel;
+  priorityRationale: string;
+  relatedDepartment: string;
+  issueIndications: string[];
+  professionalSummary: string;
+  missingInvestigationInfo: string[];
+  dataLimitations: string;
+}
+
+export interface AiFiveWhyStep {
+  level: number;
+  question: string;
+  finding: string;
+}
+
+export interface AiFishboneFactor {
+  category: Rca6MCategory;
+  isRelevant: boolean;
+  possibleCauses: string[];
+  evidenceBasis: string;
+}
+
+export interface AiRootCauseResult {
+  fiveWhy: {
+    symptom: string;
+    steps: AiFiveWhyStep[];
+    rootCauseConclusion: string;
+    symptomsVsRootCauseNote: string;
+  };
+  fishbone6M: AiFishboneFactor[];
+  recommendedPrimaryCategory: Rca6MCategory;
+  contributingFactors: string;
+  impact: string;
+  correctiveRecommendations: string;
+  dataLimitations: string;
+}
+
+export interface AiRepeatCluster {
+  patternTitle: string;
+  complaintCategory: string;
+  departments: string[];
+  similarCaseCount: number;
+  similarTicketIds: string[];
+  occurrencePeriod: string;
+  previousActionsSummary: string;
+  potentialEffectivenessGap: string;
+  neutralObservationNote: string;
+}
+
+export interface AiRepeatGrievanceResult {
+  totalAnalyzedCases: number;
+  repeatClusterCount: number;
+  clusters: AiRepeatCluster[];
+  overallPatternSummary: string;
+  dataLimitations: string;
+}
+
+export type AiRiskAttentionLevel = 'Critical Attention' | 'High Attention' | 'Normal Monitoring';
+
+export interface AiRiskItem {
+  ticketId: string;
+  caseId: string;
+  department: string;
+  complaintCategory: string;
+  attentionLevel: AiRiskAttentionLevel;
+  riskIndicators: string[];
+  escalationPotential: string;
+  humanReviewReason: string;
+  requiresPriorityHumanReview: boolean;
+}
+
+export interface AiRiskAssessmentResult {
+  criticalAttentionCount: number;
+  highAttentionCount: number;
+  normalMonitoringCount: number;
+  riskItems: AiRiskItem[];
+  earlyWarningSummary: string;
+  governanceDisclaimer: string;
+  dataLimitations: string;
+}
+
+export interface AiCapaDraftItem {
+  correctiveAction: string;
+  preventiveAction: string;
+  recommendedPic: string;
+  recommendedDepartment: string;
+  targetFollowUpDays: number;
+  suggestedTargetDate: string;
+  expectedOutcome: string;
+  monitoringRecommendation: string;
+}
+
+export interface AiRecommendedCapaResult {
+  drafts: AiCapaDraftItem[];
+  policyAlignmentNote: string;
+  dataLimitations: string;
+}
+
+export type AiManagementInsightType = 'weekly' | 'monthly' | 'departmental' | 'executive';
+
+export interface AiActualManagementMetrics {
+  periodLabel: string;
+  totalGrievance: number;
+  dominantCategory: { name: string; count: number; percentage: number };
+  highestDepartment: { name: string; count: number; percentage: number };
+  repeatGrievanceCount: number;
+  slaComplianceRate: number;
+  onTimeCount: number;
+  overdueCount: number;
+  pendingCount: number;
+  unresolvedCases: number;
+  criticalActiveCount: number;
+  rootCauseTrends: { category: string; count: number }[];
+}
+
+export interface AiManagementInsightsResult {
+  insightType: AiManagementInsightType;
+  actualMetrics: AiActualManagementMetrics;
+  executiveNarrative: string;
+  keyFindings: string[];
+  rootCauseTrendSummary: string;
+  recommendedManagementActions: string[];
+  dataLimitations: string;
+}
+
+export interface AiAnalysisRecord<T = any> {
+  id: string;
+  caseId?: string | null;
+  ticketId?: string | null;
+  analysisType: AiAnalysisType;
+  title: string;
+  result: T;
+  dataSources: string[];
+  dataLimitations: string;
+  modelUsed: string;
+  reviewStatus: AiReviewStatus;
+  reviewedBy?: string | null;
+  reviewedByRole?: string | null;
+  reviewedAt?: string | null;
+  reviewNotes?: string | null;
+  appliedToModule?: boolean;
+  appliedAt?: string | null;
+  createdBy: string;
+  createdById: string;
+  createdAt: string;
+}
+

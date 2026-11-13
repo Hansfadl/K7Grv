@@ -39,6 +39,12 @@ service cloud.firestore {
         allow write: if isValidId(caseId) && isValidId(rcId);
       }
 
+      // Subcollections: 6M Root cause analysis
+      match /root_causes_6m/{rcId} {
+        allow read, list: if true;
+        allow write: if isValidId(caseId) && isValidId(rcId);
+      }
+
       // Subcollections: Corrective & Preventive Actions (CAPA)
       match /action_plans/{actionId} {
         allow read, list: if true;
@@ -56,6 +62,18 @@ service cloud.firestore {
         allow read, list: if true;
         allow write: if isValidId(caseId) && isValidId(evidenceId);
       }
+
+      // Subcollections: AI Decision Support analyses & HR reviews
+      match /ai_analyses/{analysisId} {
+        allow read, list: if true;
+        allow write: if isValidId(caseId) && isValidId(analysisId);
+      }
+    }
+
+    // Global AI Insights, Repeat Detection & Risk Assessments
+    match /ai_insights/{insightId} {
+      allow read, list: if true;
+      allow write: if isValidId(insightId);
     }
 
     // Audit Logs: Append-only compliance & access tracking ledger
